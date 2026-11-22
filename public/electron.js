@@ -844,7 +844,15 @@ ipcMain.handle("save-png", async (_e, { dataUrl, suggestedName }) => {
     return { ok: false, reason: String(e) };
   }
 });
-ipcMain.handle("wallets:all", async () => getWallets());
+// Wcash keeps one wallet per network. The "Main Wallet" placeholder the
+// loading screen adds for an empty list opens that same wallet again; once a
+// real wallet exists on a chain, choosing the placeholder hung the app while
+// the real one was syncing. Hide the placeholder on chains that have a wallet.
+ipcMain.handle("wallets:all", async () => {
+  const wallets = await getWallets();
+  const chainsWithWallet = new Set(wallets.filter((w) => w && w.creationType !== "Main").map((w) => w.chain_name));
+  return wallets.filter((w) => !(w && w.creationType === "Main" && chainsWithWallet.has(w.chain_name)));
+});
 ipcMain.handle("wallets:get", async (_e, id) => getWallet(id));
 ipcMain.handle("wallets:add", async (_e, wallet) => addWallet(wallet));
 ipcMain.handle("wallets:update", async (_e, wallet) => updateWallet(wallet));
