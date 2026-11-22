@@ -1,0 +1,110 @@
+.line {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  /* BalanceBlock already brings 16px of its own padding underneath, so the gap
+     is pulled back rather than added to. */
+  margin-bottom: -4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: right;
+}
+
+.uri {
+  font-size: 12px;
+  opacity: 0.75;
+  /* The line is right-aligned so this grows leftwards; ellipsis is the floor
+     for a URI longer than the pane. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same shape as the migration part badges, so a status chip reads as a status
+   chip wherever it appears. Neutral on purpose: the mode is not a verdict. */
+.badge {
+  flex: none;
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-primary-disable);
+  color: var(--color-primary-disable);
+  text-transform: uppercase;
+}
+
+/* The shared .modal grows with its content and pushes its own footer past the
+   bottom of the window once the registry returns a long list. Bounding it and
+   letting only the list scroll keeps Cancel reachable at any list length. */
+.pickermodal {
+  top: 10%;
+  transform: none;
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.pickertitle {
+  flex: none;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.serverlist {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pickerfooter {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-top: 8px;
+}
+
+.serveroption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 4px;
+  border: none;
+  border-bottom: 1px solid var(--color-primary-disable);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.serveroption:last-child {
+  border-bottom: none;
+}
+
+.serveroption:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A drawn circle rather than the "●" glyph: the glyph sits wherever the font
+   puts it inside its em box, which reads as misaligned next to text. */
+.dot {
+  flex: none;
+  /* Big enough to be a comfortable hover target, since it owns the tooltip. */
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background-color: currentColor;
+  cursor: help;
+}

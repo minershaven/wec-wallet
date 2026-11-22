@@ -1,0 +1,30 @@
+.sidebar {
+  background-color: var(--color-background-dark);
+  /* Hug the menu content and carry a black bottom strip the same size as the
+     black gap under the wallet selector at the top (SelectWallet's 20px
+     marginBottom), so the last menu item gets a matching black bottom. The
+     status blocks below sit on the app background, separated by a thin line. */
+  padding-bottom: 20px;
+}
+
+.sidebarmenuitem {
+  height: 40px;
+  padding: 5px;
+  margin-left: 16px;
+  font-size: 20px;
+}
+
+.sidebarmenuitemactive {
+  color: var(--color-primary);
+}
+
+.sidebarlogobg {
+  background: var(--color-background);
+  margin-bottom: 8px;
+  padding: 8px;
+}
+
+.exportedPrivKeys {
+  width: 100%;
+  max-height: calc(100vh - 400px);
+}

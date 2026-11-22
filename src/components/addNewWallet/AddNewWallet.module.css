@@ -1,0 +1,24 @@
+.addnewwalletcontainer {
+  display: flex;
+  flex-direction: column;
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.detailcontainer {
+  width: 60%;
+  flex-direction: column;
+  margin-left: 20%;
+  margin-top: 3%;
+}
+
+.detaillines {
+  border: 1px solid grey;
+  padding: 16px;
+}
+
+.detailline {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}

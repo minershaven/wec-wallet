@@ -1,0 +1,75 @@
+[package]
+name = "zingolib-native"
+version = "0.1.0"
+authors = ["Wcash Wallet contributors"]
+license = "ISC"
+edition = "2021"
+exclude = ["native.node"]
+
+[lib]
+path = "src/wcash_adapter.rs"
+crate-type = ["cdylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["wcash-testnet"]
+# Public and unsigned package builds use only the immutable reviewed Git pin.
+wcash-testnet = ["dep:zingolib"]
+wcash-mainnet = ["dep:zingolib"]
+# The local QA build is deliberately explicit and enables the default-off
+# Regtest facade on the same immutable core revision as Testnet.
+wcash-regtest = ["dep:zingolib", "zingolib/regtest"]
+
+[dependencies]
+# The Wcash facade is pinned to one immutable, reviewed wallet-core revision.
+# The inherited Zingo implementation remains byte-for-byte in src/lib.rs for
+# reference but is neither linked nor exported by the Wcash native artifact.
+zingolib = { git = "https://github.com/w-cash/wallet-core.git", rev = "5bfd56f3ca4f332f9520908821a0b7e166b2372f", optional = true }
+wcash-wallet = { git = "https://github.com/w-cash/wolf.git", rev = "45393319d24c3c3181f98d503c97a315661b59af" }
+
+bip0039 = { version = "0.14", features = ["rand"] }
+serde_json = "1"
+tokio = "1"
+thiserror = "2"
+secrecy = "0.8"
+zeroize = "1"
+once_cell = "1"
+
+[dependencies.neon]
+version = "1"
+default-features = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = ["Security_Credentials_UI", "Win32_Foundation", "Win32_System_WinRT"] }
+windows-future = "0.2"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Cargo ignores a dependency's patch table, so this native root repeats the
+# immutable Wcash/Ironwood source selections from wallet-core at the pinned SHA.
+[patch.crates-io]
+time = { git = "https://github.com/time-rs/time", tag = "v0.3.47" }
+pczt = { git = "https://github.com/w-cash/wolf.git", rev = "45393319d24c3c3181f98d503c97a315661b59af" }
+zcash_primitives = { git = "https://github.com/w-cash/wolf.git", rev = "45393319d24c3c3181f98d503c97a315661b59af" }
+zcash_protocol = { git = "https://github.com/w-cash/wolf.git", rev = "45393319d24c3c3181f98d503c97a315661b59af" }
+lightwallet-protocol = { git = "https://github.com/zingolabs/lightwallet-protocol-rust", rev = "9bdfdc77eb283f2a3d26c27100cc2ac90148cd93" }
+
+[profile.release]
+debug = 1
+# panic strategy: intentionally left at the default ("unwind").
+#
+# Switching to `panic = "abort"` would shrink the MAS binary slightly and is
+# tempting from a security-hardening angle, but it is incompatible with the
+# `with_panic_guard` infrastructure used throughout this crate. That guard
+# wraps every FFI entry point in `panic::catch_unwind`, converting transient
+# panics (zingolib internal bugs, lock poisoning, etc.) into a recoverable
+# `ZingolibError::Panic` returned to JS. With `abort`, those panics would
+# instead terminate the wallet process. The unwind/resilience trade-off was
+# made deliberately at the architecture level — do not flip this flag without
+# first removing `with_panic_guard` everywhere and propagating errors via
+# `Result` only.

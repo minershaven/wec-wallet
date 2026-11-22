@@ -1,0 +1,230 @@
+import React, { useContext, useEffect, useState } from "react";
+import cstyles from "../common/Common.module.css";
+import styles from "./Messages.module.css";
+import { ValueTransferClass, AddressBookEntryClass, ValueTransferStatusEnum, TotalBalanceClass } from "../appstate";
+import ScrollPaneBottom from "../scrollPane/ScrollPane";
+import MessagesItemBlock from "./components/MessagesItemBlock";
+import { BalanceBlock, BalanceBlockHighlight } from "../balanceBlock";
+import { ServerHealthLine } from "../serverHealthLine";
+import Utils from "../../utils/utils";
+import { ContextApp } from "../../context/ContextAppState";
+import VtModal from "../history/components/VtModal";
+
+type MessagesProps = {};
+
+const Messages: React.FC<MessagesProps> = () => {
+  const context = useContext(ContextApp);
+  const {
+    messages,
+    info,
+    addressBook,
+    totalBalance,
+    readOnly,
+    fetchError,
+    valueTransfers,
+    orchardPool,
+    saplingPool,
+    transparentPool,
+    calculateShieldFee,
+    handleShieldButton,
+    zecPrice,
+  } = context;
+
+  const [valueTransferDetail, setValueTransferDetail] = useState<ValueTransferClass | undefined>(undefined);
+  const [valueTransferDetailIndex, setValueTransferDetailIndex] = useState<number>(-1);
+  const [modalIsOpen, setModalIsOpen] = useState<boolean>(false);
+  const [numVtnsToShow, setNumVtnsToShow] = useState<number>(100);
+  const [isLoadMoreEnabled, setIsLoadMoreEnabled] = useState<boolean>(false);
+  const [messagesSorted, setMessagesSorted] = useState<ValueTransferClass[]>([]);
+  const [addressBookMap, setAddressBookMap] = useState<Map<string, string>>(new Map());
+
+  const [anyPending, setAnyPending] = useState<boolean>(false);
+  const [shieldFee, setShieldFee] = useState<number>(0);
+
+  useEffect(() => {
+    // set somePending as well here when I know there is something new in ValueTransfers
+    const pending: number =
+      valueTransfers.length > 0
+        ? valueTransfers
+            .filter((vt: ValueTransferClass) => vt.status !== ValueTransferStatusEnum.failed)
+            .filter((vt: ValueTransferClass) => vt.confirmations >= 0 && vt.confirmations < 3).length
+        : 0;
+    setAnyPending(pending > 0);
+  }, [valueTransfers]);
+
+  useEffect(() => {
+    if (totalBalance.confirmedTransparentBalance > 0 && calculateShieldFee && !readOnly && !anyPending) {
+      (async () => {
+        setShieldFee(await calculateShieldFee());
+      })();
+    }
+  }, [totalBalance.confirmedTransparentBalance, anyPending, calculateShieldFee, readOnly]);
+
+  useEffect(() => {
+    setIsLoadMoreEnabled(messages && numVtnsToShow < messages.length);
+  }, [numVtnsToShow, messages]);
+
+  useEffect(() => {
+    setMessagesSorted(
+      messages
+        .filter((a: ValueTransferClass) => a.memos && a.memos.length > 0 && a.memos.join(""))
+        .slice(-numVtnsToShow),
+    );
+  }, [numVtnsToShow, messages]);
+
+  useEffect(() => {
+    setAddressBookMap(
+      addressBook.reduce((m: Map<string, string>, obj: AddressBookEntryClass) => {
+        m.set(obj.address, obj.label);
+        return m;
+      }, new Map()),
+    );
+  }, [addressBook]);
+
+  const closeModal = () => {
+    setValueTransferDetail(undefined);
+    setValueTransferDetailIndex(-1);
+    setModalIsOpen(false);
+  };
+
+  const show100MoreVtns = () => {
+    setNumVtnsToShow(numVtnsToShow + 100);
+  };
+
+  return (
+    <div>
+      <div className={`${cstyles.well} ${styles.containermargin}`}>
+        <ServerHealthLine />
+        <div className={cstyles.balancebox}>
+          <BalanceBlockHighlight
+            topLabel="All Funds"
+            zecValue={TotalBalanceClass.total(totalBalance)}
+            usdValue={Utils.getZecToUsdString(zecPrice, TotalBalanceClass.total(totalBalance))}
+            currencyName={info.currencyName}
+            zecValueConfirmed={TotalBalanceClass.confirmedTotal(totalBalance)}
+            usdValueConfirmed={Utils.getZecToUsdString(zecPrice, TotalBalanceClass.confirmedTotal(totalBalance))}
+          />
+          {orchardPool && (
+            <BalanceBlock
+              topLabel="Ironwood"
+              zecValue={totalBalance.totalIronwoodBalance}
+              usdValue={Utils.getZecToUsdString(zecPrice, totalBalance.totalIronwoodBalance)}
+              currencyName={info.currencyName}
+              zecValueConfirmed={totalBalance.confirmedIronwoodBalance}
+              usdValueConfirmed={Utils.getZecToUsdString(zecPrice, totalBalance.confirmedIronwoodBalance)}
+            />
+          )}
+          {orchardPool && totalBalance.totalOrchardBalance > 0 && (
+            <BalanceBlock
+              topLabel="Orchard (legacy)"
+              zecValue={totalBalance.totalOrchardBalance}
+              usdValue={Utils.getZecToUsdString(zecPrice, totalBalance.totalOrchardBalance)}
+              currencyName={info.currencyName}
+              zecValueConfirmed={totalBalance.confirmedOrchardBalance}
+              usdValueConfirmed={Utils.getZecToUsdString(zecPrice, totalBalance.confirmedOrchardBalance)}
+            />
+          )}
+          {saplingPool && (
+            <BalanceBlock
+              topLabel="Sapling"
+              zecValue={totalBalance.totalSaplingBalance}
+              usdValue={Utils.getZecToUsdString(zecPrice, totalBalance.totalSaplingBalance)}
+              currencyName={info.currencyName}
+              zecValueConfirmed={totalBalance.confirmedSaplingBalance}
+              usdValueConfirmed={Utils.getZecToUsdString(zecPrice, totalBalance.confirmedSaplingBalance)}
+            />
+          )}
+          {transparentPool && (
+            <BalanceBlock
+              topLabel="Transparent"
+              zecValue={totalBalance.totalTransparentBalance}
+              usdValue={Utils.getZecToUsdString(zecPrice, totalBalance.totalTransparentBalance)}
+              currencyName={info.currencyName}
+              zecValueConfirmed={totalBalance.confirmedTransparentBalance}
+              usdValueConfirmed={Utils.getZecToUsdString(zecPrice, totalBalance.confirmedTransparentBalance)}
+            />
+          )}
+        </div>
+        <div className={cstyles.balancebox}>
+          {totalBalance.confirmedTransparentBalance >= shieldFee && shieldFee > 0 && !readOnly && !anyPending && (
+            <>
+              <button className={cstyles.primarybutton} type="button" onClick={handleShieldButton}>
+                Shield Transparent Balance (Fee: {shieldFee})
+              </button>
+            </>
+          )}
+          {!!anyPending && (
+            <div className={`${cstyles.red} ${cstyles.small} ${cstyles.padtopsmall}`}>
+              Some transactions are pending waiting for the minimum confirmations (3). Balances may change.
+            </div>
+          )}
+        </div>
+        {!!fetchError && !!fetchError.error && (
+          <>
+            <hr />
+            <div className={cstyles.balancebox} style={{ color: Utils.getCssVariable("--color-error") }}>
+              {fetchError.command + ": " + fetchError.error}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 5 }} className={`${cstyles.xlarge} ${cstyles.marginnegativetitle} ${cstyles.center}`}>
+        Messages
+      </div>
+
+      <ScrollPaneBottom offsetHeight={180} initialScrollType="bottom">
+        {!messagesSorted && <div className={`${cstyles.center} ${cstyles.margintoplarge}`}>Loading...</div>}
+
+        {messagesSorted && messagesSorted.length === 0 && (
+          <div className={`${cstyles.center} ${cstyles.margintoplarge}`}>No Transactions Yet</div>
+        )}
+
+        {messagesSorted && messagesSorted.length > 0 && isLoadMoreEnabled && (
+          <button
+            type="button"
+            style={{ marginLeft: "45%", width: "100px", marginTop: 15, marginBottom: 15 }}
+            className={cstyles.primarybutton}
+            onClick={show100MoreVtns}
+          >
+            Load more
+          </button>
+        )}
+
+        {messagesSorted &&
+          messagesSorted.length > 0 &&
+          messagesSorted.map((vt: ValueTransferClass, index: number) => {
+            return (
+              <MessagesItemBlock
+                index={index}
+                key={`${index}-${vt.type}-${vt.txid}`}
+                vt={vt}
+                setValueTransferDetail={(ttt: ValueTransferClass) => setValueTransferDetail(ttt)}
+                setValueTransferDetailIndex={(iii: number) => setValueTransferDetailIndex(iii)}
+                setModalIsOpen={(bbb: boolean) => setModalIsOpen(bbb)}
+                currencyName={info.currencyName}
+                addressBookMap={addressBookMap}
+                previousLineWithSameTxid={index === 0 ? false : messagesSorted[index - 1].txid === vt.txid}
+              />
+            );
+          })}
+      </ScrollPaneBottom>
+
+      {modalIsOpen && (
+        <VtModal
+          index={valueTransferDetailIndex}
+          length={messagesSorted.length}
+          totalLength={messages.length}
+          vt={valueTransferDetail}
+          modalIsOpen={modalIsOpen}
+          closeModal={closeModal}
+          currencyName={info.currencyName}
+          addressBookMap={addressBookMap}
+          valueTransfersSliced={messagesSorted}
+        />
+      )}
+    </div>
+  );
+};
+
+export default Messages;

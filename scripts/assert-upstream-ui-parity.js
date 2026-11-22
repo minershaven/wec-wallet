@@ -1,0 +1,155 @@
+"use strict";
+
+const crypto = require("crypto");
+const { spawnSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+
+const root = path.resolve(__dirname, "..");
+const manifestPath = path.join(root, "config", "upstream-ui-parity.json");
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const allowedExtensions = new Set(manifest.protected.extensions);
+const excluded = new Set(manifest.protected.excludedPaths);
+
+const toPosix = (value) => value.split(path.sep).join("/");
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+function git(args) {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `git ${args.join(" ")} failed`).trim());
+  }
+  return result.stdout.trim();
+}
+
+function visit(relativePath, output) {
+  const absolutePath = path.join(root, relativePath);
+  const stat = fs.statSync(absolutePath);
+  if (stat.isDirectory()) {
+    for (const name of fs.readdirSync(absolutePath).sort()) {
+      visit(toPosix(path.join(relativePath, name)), output);
+    }
+    return;
+  }
+
+  if (!allowedExtensions.has(path.extname(relativePath))) return;
+  if (/\.(?:test|spec)\.[^.]+$/.test(relativePath) || relativePath.includes("/__mocks__/")) return;
+  if (excluded.has(relativePath)) return;
+  output.push(relativePath);
+}
+
+const protectedFiles = [];
+for (const protectedRoot of manifest.protected.roots) visit(protectedRoot, protectedFiles);
+protectedFiles.sort();
+
+const aggregate = crypto.createHash("sha256");
+for (const relativePath of protectedFiles) {
+  aggregate.update(relativePath);
+  aggregate.update("\0");
+  aggregate.update(fs.readFileSync(path.join(root, relativePath)));
+  aggregate.update("\0");
+}
+
+const failures = [];
+const taggedCommit = git(["rev-parse", `refs/tags/${manifest.baseline.tag}^{commit}`]);
+const expectedTagCommit = manifest.baseline.tagCommit || manifest.baseline.commit;
+if (taggedCommit !== expectedTagCommit) {
+  failures.push(`upstream tag resolves to ${taggedCommit}, expected ${expectedTagCommit}`);
+}
+
+// Anchor the allowlist to the actual upstream Git tree. This catches removed,
+// renamed, and newly added production UI files rather than trusting only a
+// hash manifest maintained on the same branch as the changes it approves.
+const productionPath = (relativePath) =>
+  allowedExtensions.has(path.extname(relativePath)) &&
+  !/\.(?:test|spec)\.[^.]+$/.test(relativePath) &&
+  !relativePath.includes("/__mocks__/");
+const diffArgs = [
+  "diff",
+  "--name-only",
+  "--diff-filter=ACDMRTUXB",
+  manifest.baseline.commit,
+  "--",
+  ...manifest.protected.roots,
+];
+const changedFromUpstream = new Set(git(diffArgs).split("\n").filter(Boolean).map(toPosix).filter(productionPath));
+const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...manifest.protected.roots])
+  .split("\n")
+  .filter(Boolean)
+  .map(toPosix)
+  .filter(productionPath);
+for (const relativePath of untracked) changedFromUpstream.add(relativePath);
+for (const relativePath of changedFromUpstream) {
+  if (!excluded.has(relativePath))
+    failures.push(`${relativePath}: production UI change is not approved against upstream`);
+}
+for (const relativePath of excluded) {
+  if (!changedFromUpstream.has(relativePath))
+    failures.push(`${relativePath}: approved UI deviation does not differ from upstream`);
+}
+
+if (protectedFiles.length !== manifest.protected.fileCount) {
+  failures.push(`protected file count ${protectedFiles.length} != ${manifest.protected.fileCount}`);
+}
+const protectedDigest = aggregate.digest("hex");
+if (protectedDigest !== manifest.protected.sha256) {
+  failures.push(`protected UI digest ${protectedDigest} != ${manifest.protected.sha256}`);
+}
+
+for (const [relativePath, expected] of Object.entries(manifest.approvedBrandingFiles)) {
+  const absolutePath = path.join(root, relativePath);
+  const actual = fs.existsSync(absolutePath) ? sha256(fs.readFileSync(absolutePath)) : "missing";
+  if (actual !== expected) failures.push(`${relativePath}: ${actual} != ${expected}`);
+}
+
+for (const [relativePath, expected] of Object.entries(manifest.approvedProtocolFiles || {})) {
+  const absolutePath = path.join(root, relativePath);
+  const actual = fs.existsSync(absolutePath) ? sha256(fs.readFileSync(absolutePath)) : "missing";
+  if (actual !== expected) failures.push(`${relativePath}: ${actual} != ${expected}`);
+}
+
+for (const [relativePath, expected] of Object.entries(manifest.approvedLayoutFiles || {})) {
+  const absolutePath = path.join(root, relativePath);
+  const actual = fs.existsSync(absolutePath) ? sha256(fs.readFileSync(absolutePath)) : "missing";
+  if (actual !== expected) failures.push(`${relativePath}: ${actual} != ${expected}`);
+}
+
+for (const forbiddenPath of manifest.forbiddenPaths) {
+  if (fs.existsSync(path.join(root, forbiddenPath))) failures.push(`${forbiddenPath} must not exist`);
+}
+
+// Local profile limitations belong behind the compatibility adapter. These
+// phrases previously marked upstream controls unavailable and created a
+// different Wcash UI in both React and Electron menus.
+const forbiddenProfileUiCopy = [
+  "fixed Local Regtest profile",
+  "unavailable in Local Regtest",
+  "Local Regtest QA supports one",
+  "Fixed Local Address",
+  "seed restore only",
+];
+const uiTextCandidates = git(["ls-files", "--", ...manifest.protected.roots, "public/electron.js"])
+  .split("\n")
+  .filter(Boolean)
+  .map(toPosix)
+  .filter((relativePath) => relativePath === "public/electron.js" || productionPath(relativePath));
+for (const candidate of uiTextCandidates) {
+  const contents = fs.readFileSync(path.join(root, candidate), "utf8");
+  for (const phrase of forbiddenProfileUiCopy) {
+    if (contents.includes(phrase)) failures.push(`${candidate}: profile-specific UI copy is forbidden: ${phrase}`);
+  }
+}
+
+if (failures.length > 0) {
+  console.error(`Exact Zingo UI parity failed (${manifest.baseline.tag} / ${manifest.baseline.commit}):`);
+  for (const failure of failures) console.error(`- ${failure}`);
+  process.exit(1);
+}
+
+console.log(
+  `Exact Zingo UI parity passed against ${manifest.baseline.tag}: ${protectedFiles.length} unchanged protected files, ` +
+    `${changedFromUpstream.size} explicit upstream deviations, ` +
+    `${Object.keys(manifest.approvedBrandingFiles).length} branding files, ` +
+    `${Object.keys(manifest.approvedProtocolFiles || {}).length} protocol files, ` +
+    `${Object.keys(manifest.approvedLayoutFiles || {}).length} requested layout files.`,
+);

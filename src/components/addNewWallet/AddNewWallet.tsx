@@ -1,0 +1,1064 @@
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
+import TextareaAutosize from "react-textarea-autosize";
+import cstyles from "../common/Common.module.css";
+import styles from "./AddNewWallet.module.css";
+import { ContextApp } from "../../context/ContextAppState";
+import {
+  CreationTypeEnum,
+  PerformanceLevelEnum,
+  ServerClass,
+  ServerSelectionEnum,
+  WalletType,
+  ServerChainNameEnum,
+} from "../appstate";
+import serverUrisList from "../../utils/serverUrisList";
+import fetchServerList from "../../utils/fetchServerList";
+import selectFastestServer from "../../utils/selectFastestServer";
+import Utils from "../../utils/utils";
+import { native, ipcRenderer } from "../../electronBridge";
+import { useLocation } from "react-router-dom";
+import ScrollPaneTop from "../scrollPane/ScrollPane";
+import RPC from "../../rpc/rpc";
+
+type AddNewWalletProps = {
+  closeModal: () => void;
+  setWallets: (ws: WalletType[]) => void;
+  setCurrentWallet: (w: WalletType | null) => void;
+  navigateToLoadingScreenChangingWallet: () => void;
+  doSaveWallet: () => void;
+  clearTimers: () => Promise<void>;
+};
+
+const AddNewWallet: React.FC<AddNewWalletProps> = ({
+  closeModal,
+  setWallets,
+  setCurrentWallet,
+  navigateToLoadingScreenChangingWallet,
+  doSaveWallet,
+  clearTimers,
+}) => {
+  const location = useLocation();
+  let mode: "addnew" | "settings" | "delete" = "addnew";
+  if (location.state) {
+    const locationState = location.state as {
+      mode: "addnew" | "settings" | "delete";
+    };
+    mode = locationState.mode;
+  }
+  const context = useContext(ContextApp);
+  const { openErrorModal, closeErrorModal, currentWallet, wallets, currentWalletOpenError } = context;
+
+  const [newWalletType, setNewWalletType] = useState<"new" | "seed" | "ufvk" | "file">("new");
+  const [seedPhrase, setSeedPhrase] = useState<string>("");
+  const [birthday, setBirthday] = useState<string>("");
+  const [ufvk, setUfvk] = useState<string>("");
+  const [file, setFile] = useState<string>("");
+
+  const [alias, setAlias] = useState<string>("");
+  const [performanceLevel, setPerformanceLevel] = useState<PerformanceLevelEnum>(PerformanceLevelEnum.High);
+
+  const [selectedServer, setSelectedServer] = useState<string>("");
+  const [selectedChain, setSelectedChain] = useState<ServerChainNameEnum | "">("");
+  const [selectedSelection, setSelectedSelection] = useState<ServerSelectionEnum | "">("");
+
+  const [autoServer, setAutoServer] = useState<string>("");
+  const [customServer, setCustomServer] = useState<string>("");
+  const [listServer, setListServer] = useState<string>("");
+
+  const [servers, setServers] = useState<ServerClass[]>(serverUrisList().filter((s: ServerClass) => !s.obsolete));
+  const [serverExpanded, setServerExpanded] = useState<boolean>(false);
+
+  const isSubmittingRef = useRef(false);
+
+  // Both public chains, once, when the modal opens — the picker offers either
+  // one and refetching on every chain switch would buy nothing. A chain whose
+  // request comes back empty keeps its static entries, so a silent registry
+  // degrades to the list we shipped rather than to an empty picker.
+  useEffect(() => {
+    let dropped = false;
+    const staticFor = (chain: ServerChainNameEnum) =>
+      serverUrisList().filter((s: ServerClass) => !s.obsolete && s.chain_name === chain);
+    (async () => {
+      const [mainLive, testLive] = await Promise.all([
+        fetchServerList(ServerChainNameEnum.mainChainName),
+        fetchServerList(ServerChainNameEnum.testChainName),
+      ]);
+      if (dropped) {
+        return;
+      }
+      setServers([
+        ...(mainLive.length > 0 ? mainLive : staticFor(ServerChainNameEnum.mainChainName)),
+        ...(testLive.length > 0 ? testLive : staticFor(ServerChainNameEnum.testChainName)),
+      ]);
+    })();
+    return () => {
+      dropped = true;
+    };
+  }, []);
+
+  const news = {
+    new: "Create a New Wallet",
+    seed: "Restore Wallet from Seed Phrase",
+    ufvk: "Restore Wallet from Unified Full Viewing Key",
+    file: "Restore Wallet from an existent DAT file",
+  };
+
+  const activationHeight = {
+    main: 419200,
+    test: 280000,
+    regtest: 1,
+    "": 1,
+  };
+
+  const initialServerValue = useCallback(
+    (server: string, _chain_name: ServerChainNameEnum | "", selection: ServerSelectionEnum | "") => {
+      if (selection === ServerSelectionEnum.custom) {
+        setCustomServer(server);
+
+        setListServer("");
+
+        setAutoServer(server);
+      } else if (selection === ServerSelectionEnum.auto) {
+        setAutoServer(server);
+
+        setListServer("");
+
+        setCustomServer("");
+      } else {
+        // list
+        setListServer(server);
+
+        setCustomServer("");
+
+        setAutoServer(server);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {}, [currentWallet, initialServerValue, mode]);
+
+  useEffect(() => {
+    (async () => {
+      // Try to read the default server
+      const settings = await ipcRenderer.invoke("loadSettings");
+      const currServer: string = currentWallet ? currentWallet.uri : settings.serveruri;
+      const currChain: ServerChainNameEnum = currentWallet ? currentWallet.chain_name : settings.serverchain_name;
+      const currSelection: ServerSelectionEnum = currentWallet ? currentWallet.selection : settings.serverselection;
+      const safeChain = currChain || "";
+      const safeServer = currServer || "";
+      const safeSelection = currSelection || "";
+      initialServerValue(safeServer, safeChain, safeSelection as ServerSelectionEnum | "");
+      setSelectedServer(safeServer);
+      setSelectedChain(safeChain);
+      setSelectedSelection(safeSelection as ServerSelectionEnum | "");
+      if (mode !== "addnew" && !!currentWallet) {
+        // settings / delete: pre-fill with current wallet's data
+        setAlias(currentWallet.alias);
+        setPerformanceLevel(currentWallet.performanceLevel);
+        setFile(currentWallet.fileName);
+      } else if (mode === "addnew") {
+        // addnew: this component instance may be reused after the user was on
+        // settings or delete (same route, only location.state changes). Reset
+        // the wallet-specific fields so values from the previous mode don't bleed in.
+        setAlias("");
+        setPerformanceLevel(PerformanceLevelEnum.High);
+        setFile("");
+        setNewWalletType("new");
+        setSeedPhrase("");
+        setBirthday("");
+        setUfvk("");
+      }
+    })();
+  }, [
+    initialServerValue,
+    currentWallet?.chain_name,
+    currentWallet?.selection,
+    currentWallet?.uri,
+    currentWallet,
+    servers,
+    mode,
+  ]);
+
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const nextWalletName = async () => {
+    let maxId = !!wallets && wallets.length > 0 ? Math.max(...wallets.map((w) => w.id)) : 3;
+    if (maxId < 3) {
+      maxId = 3;
+    }
+    let next = maxId + 1;
+    // we need to check if this file already exists
+    let nextWalletName = `wcash-wallet-${next}.dat`;
+
+    while (true) {
+      console.log(next, nextWalletName);
+      const walletExistsResult: boolean = await native.wallet_exists(
+        selectedServer,
+        selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+        performanceLevel,
+        3,
+        nextWalletName,
+      );
+      console.log(walletExistsResult);
+      if (walletExistsResult) {
+        next = next + 1;
+        nextWalletName = `wcash-wallet-${next}.dat`;
+        console.log("NEXT", next, nextWalletName);
+      } else {
+        break;
+      }
+    }
+
+    return { next, nextWalletName };
+  };
+
+  const createNextWallet = async (id: number, wallet_name: string, alias: string) => {
+    const currentWallet: WalletType = {
+      id,
+      fileName: wallet_name, // by default: wcash-wallet.dat
+      alias, // by default: the first word of the seed phrase
+      chain_name: selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+      creationType:
+        newWalletType === "ufvk"
+          ? CreationTypeEnum.Ufvk
+          : newWalletType === "file"
+            ? CreationTypeEnum.File
+            : CreationTypeEnum.Seed,
+      uri: selectedServer,
+      selection: selectedSelection ? selectedSelection : ServerSelectionEnum.auto,
+      performanceLevel: performanceLevel,
+    };
+    await ipcRenderer.invoke("wallets:add", currentWallet);
+    // re-fetching wallets
+    const newWallets = await ipcRenderer.invoke("wallets:all");
+    setWallets(newWallets);
+    setCurrentWallet(currentWallet);
+  };
+
+  const doCreateNewWallet = async () => {
+    try {
+      const { next: id, nextWalletName: wallet_name } = await nextWalletName();
+      const result: string = await native.init_new(
+        selectedServer,
+        selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+        performanceLevel,
+        3,
+        wallet_name,
+      );
+
+      // A failed init rejects (typed error on the throw channel); the catch
+      // below restores the previous wallet. Success is always a JSON payload.
+      const resultJSON = JSON.parse(result);
+      const seed_phrase: string = resultJSON.seed_phrase;
+
+      await createNextWallet(id, wallet_name, alias ? alias : `${seed_phrase.split(" ")[0]}...`);
+
+      await ipcRenderer.invoke("saveSettings", { key: "serveruri", value: selectedServer });
+      await ipcRenderer.invoke("saveSettings", { key: "serverchain_name", value: selectedChain });
+      await ipcRenderer.invoke("saveSettings", { key: "serverselection", value: selectedSelection });
+      await ipcRenderer.invoke("saveSettings", { key: "currentwalletid", value: id });
+      // save the wallet
+      doSaveWallet();
+      await delay(1000);
+      navigateToLoadingScreenChangingWallet();
+    } catch (error) {
+      console.error(`Critical Error create new wallet ${error}`);
+      openErrorModal("Creating New wallet", `${error}`);
+      // restore the previous wallet
+      loadCurrentWallet();
+    }
+  };
+
+  const doRestoreSeedWallet = async () => {
+    try {
+      const { next: id, nextWalletName: wallet_name } = await nextWalletName();
+      const result: string = await native.init_from_seed(
+        seedPhrase,
+        Number(birthday),
+        selectedServer,
+        selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+        performanceLevel,
+        3,
+        wallet_name,
+      );
+      // A failed init rejects (typed error on the throw channel); the catch
+      // below restores the previous wallet. Success is always a JSON payload.
+      const resultJSON = JSON.parse(result);
+      const seed_phrase: string = resultJSON.seed_phrase;
+
+      await createNextWallet(id, wallet_name, alias ? alias : `${seed_phrase.split(" ")[0]}...`);
+
+      await ipcRenderer.invoke("saveSettings", { key: "serveruri", value: selectedServer });
+      await ipcRenderer.invoke("saveSettings", { key: "serverchain_name", value: selectedChain });
+      await ipcRenderer.invoke("saveSettings", { key: "serverselection", value: selectedSelection });
+      await ipcRenderer.invoke("saveSettings", { key: "currentwalletid", value: id });
+      // save the wallet
+      setSeedPhrase("");
+      doSaveWallet();
+      await delay(1000);
+      navigateToLoadingScreenChangingWallet();
+    } catch (error) {
+      console.error(`Critical Error restore from seed ${error}`);
+      openErrorModal("Restoring wallet from seed", `${error}`);
+      // restore the previous wallet
+      loadCurrentWallet();
+    }
+  };
+
+  const doRestoreUfvkWallet = async () => {
+    try {
+      // Trim user-pasted whitespace before parsing.
+      const ufvkInput = ufvk.trim();
+
+      // Validate the UFVK cryptographically via Rust (`parse_ufvk`). The native
+      // function decodes the key with `Ufvk::decode` and returns either an
+      // "Error:" string (e.g. empty input) or a JSON object with:
+      //   { status, chain_name, address_kind, pools_available }
+      // This replaces the previous prefix-only validation, which accepted
+      // malformed keys with the right prefix and only caught them later inside
+      // init_from_ufvk with a generic error.
+      const parseResult: string = await native.parse_ufvk(ufvkInput);
+      if (!parseResult) {
+        openErrorModal("Parsing UFVK", parseResult || "Could not parse the Unified Full Viewing Key.");
+        return;
+      }
+      let parsed: { status?: string; chain_name?: string };
+      try {
+        parsed = JSON.parse(parseResult);
+      } catch {
+        openErrorModal("Parsing UFVK", "The Unified Full Viewing Key could not be parsed.");
+        return;
+      }
+      if (parsed.status !== "success") {
+        openErrorModal("Parsing UFVK", "This is not a valid Unified Full Viewing Key.");
+        return;
+      }
+      const effectiveChain = selectedChain ? selectedChain : ServerChainNameEnum.mainChainName;
+      if (parsed.chain_name !== effectiveChain) {
+        const friendly = (c: string | undefined) =>
+          c === "main" ? "mainnet" : c === "test" ? "testnet" : c === "regtest" ? "regtest" : c;
+        openErrorModal(
+          "Parsing UFVK",
+          `This Unified Full Viewing Key is for ${friendly(parsed.chain_name)}, ` +
+            `but the selected network is ${friendly(effectiveChain)}. ` +
+            `Switch the network to ${friendly(parsed.chain_name)} and try again.`,
+        );
+        return;
+      }
+
+      const { next: id, nextWalletName: wallet_name } = await nextWalletName();
+      const result: string = await native.init_from_ufvk(
+        ufvkInput,
+        Number(birthday),
+        selectedServer,
+        effectiveChain,
+        performanceLevel,
+        3,
+        wallet_name,
+      );
+      // A failed init rejects (typed error on the throw channel); the catch
+      // below restores the previous wallet. Success is always a JSON payload.
+      const resultJSON = JSON.parse(result);
+      const resultUfvk: string = resultJSON.ufvk;
+
+      createNextWallet(id, wallet_name, alias ? alias : `${resultUfvk.substring(0, 10)}...`);
+
+      await ipcRenderer.invoke("saveSettings", { key: "serveruri", value: selectedServer });
+      await ipcRenderer.invoke("saveSettings", { key: "serverchain_name", value: selectedChain });
+      await ipcRenderer.invoke("saveSettings", { key: "serverselection", value: selectedSelection });
+      await ipcRenderer.invoke("saveSettings", { key: "currentwalletid", value: id });
+      // save the wallet
+      setUfvk("");
+      doSaveWallet();
+      await delay(1000);
+      navigateToLoadingScreenChangingWallet();
+    } catch (error) {
+      console.error(`Critical Error restore from ufvk ${error}`);
+      openErrorModal("Restoring wallet from ufvk", `${error}`);
+      // restore the previous wallet
+      loadCurrentWallet();
+    }
+  };
+
+  const doRestoreFileWallet = async () => {
+    try {
+      // only needs the id, it have the wallet_name already
+      const { next: id } = await nextWalletName();
+      const wallet_name: string = file;
+      const result: string = await native.init_from_b64(
+        selectedServer,
+        selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+        performanceLevel,
+        3,
+        wallet_name,
+      );
+      // A failed init rejects (typed error on the throw channel); the catch
+      // below restores the previous wallet. Success is always a JSON payload.
+      const resultJSON = JSON.parse(result);
+      const birthday: number = resultJSON.birthday;
+
+      if (birthday < activationHeight[selectedChain]) {
+        openErrorModal(
+          "Restoring wallet from file",
+          `The birthday found ${birthday} is invalid. The sync process is not going to work.`,
+        );
+      }
+
+      await createNextWallet(id, wallet_name, alias ? alias : wallet_name);
+
+      await ipcRenderer.invoke("saveSettings", { key: "serveruri", value: selectedServer });
+      await ipcRenderer.invoke("saveSettings", { key: "serverchain_name", value: selectedChain });
+      await ipcRenderer.invoke("saveSettings", { key: "serverselection", value: selectedSelection });
+      await ipcRenderer.invoke("saveSettings", { key: "currentwalletid", value: id });
+      // save the wallet
+      doSaveWallet();
+      await delay(1000);
+      navigateToLoadingScreenChangingWallet();
+    } catch (error) {
+      console.error(`Critical Error restore from file ${error}`);
+      openErrorModal("Restoring wallet from file", `${error}`);
+      // restore the previous wallet
+      loadCurrentWallet();
+    }
+  };
+
+  const loadCurrentWallet = async () => {
+    if (currentWallet) {
+      try {
+        // A failed init rejects (typed error on the throw channel).
+        await native.init_from_b64(
+          currentWallet.uri,
+          currentWallet.chain_name,
+          currentWallet.performanceLevel,
+          3,
+          currentWallet.fileName,
+        );
+      } catch (error) {
+        openErrorModal("Loading current wallet", `${error}`);
+      }
+    }
+  };
+
+  const doSave = async () => {
+    if (!!currentWallet) {
+      if (selectedChain !== currentWallet.chain_name) {
+        openErrorModal("Save Wallet Settings", "Change the server Chain/Network is not allowed");
+        return;
+      }
+      // verify the server right here
+      if (selectedServer !== currentWallet.uri) {
+        openErrorModal(
+          "Save Wallet Settings",
+          "CHecking the new selected server, this process can take a while, 15 seconds maximum.",
+        );
+        const serverFaster = await selectFastestServer([
+          {
+            uri: selectedServer,
+            chain_name: selectedChain,
+            latency: null,
+            default: false,
+            obsolete: false,
+          } as ServerClass,
+        ]);
+        if (!serverFaster) {
+          openErrorModal("Save Wallet Settings", "This server is not working properly, choose another one.");
+          return;
+        }
+      }
+      const currentWalletSave: WalletType = {
+        id: currentWallet.id,
+        fileName: currentWallet.fileName, // by default: wcash-wallet.dat
+        alias, // by default: the first word of the seed phrase
+        chain_name: selectedChain ? selectedChain : ServerChainNameEnum.mainChainName,
+        creationType: currentWallet.creationType,
+        uri: selectedServer,
+        selection: selectedSelection ? selectedSelection : ServerSelectionEnum.auto,
+        performanceLevel: performanceLevel,
+      };
+      await ipcRenderer.invoke("wallets:update", currentWalletSave);
+      // re-fetching wallets
+      const newWallets = await ipcRenderer.invoke("wallets:all");
+      setWallets(newWallets);
+      const needStart: boolean =
+        selectedServer !== currentWallet.uri ||
+        performanceLevel !== currentWallet.performanceLevel ||
+        selectedSelection === ServerSelectionEnum.auto;
+      setCurrentWallet(currentWalletSave);
+      if (needStart) {
+        openErrorModal(
+          "Save Wallet Settings",
+          selectedServer !== currentWallet.uri || selectedSelection === ServerSelectionEnum.auto
+            ? "Opening the active Wallet with the New Server."
+            : "Opening the active Wallet with the New Performance Level",
+        );
+        await delay(1000);
+        navigateToLoadingScreenChangingWallet();
+      } else {
+        closeModal();
+      }
+    }
+  };
+
+  const doDelete = async () => {
+    if (!!currentWallet) {
+      try {
+        await clearTimers();
+        const walletExistsResult: boolean = await native.wallet_exists(
+          currentWallet.uri,
+          currentWallet.chain_name,
+          currentWallet.performanceLevel,
+          3,
+          currentWallet.fileName,
+        );
+        console.log(walletExistsResult);
+        if (walletExistsResult) {
+          // interrupt syncing, just in case.
+          // only if the App is going to delete the DAT file.
+          if (!currentWalletOpenError && currentWallet.creationType !== CreationTypeEnum.File) {
+            // doesn't matter if stop sync fails, let's delete it.
+            try {
+              const resultInterrupt: string = await native.stop_sync();
+              console.log("Stopping sync ...", resultInterrupt);
+            } catch (error) {
+              console.error(`Stopping sync Error ${error}`);
+            }
+          }
+          await RPC.deinitialize();
+
+          // remove the actual wallet
+          await ipcRenderer.invoke("wallets:remove", currentWallet.id);
+          await ipcRenderer.invoke("saveSettings", { key: "currentwalletid", value: null });
+
+          // re-fetching wallets
+          const newWallets: WalletType[] = await ipcRenderer.invoke("wallets:all");
+          setWallets(newWallets);
+
+          // if the wallet was created by a file, don't delete the file.
+          if (currentWallet.creationType !== CreationTypeEnum.File) {
+            const resultDelete: string = await native.delete_wallet(
+              currentWallet.uri,
+              currentWallet.chain_name,
+              currentWallet.performanceLevel,
+              3,
+              currentWallet.fileName ? currentWallet.fileName : "wcash-wallet.dat",
+            );
+            console.log("deleting ...", resultDelete);
+          }
+          setCurrentWallet(null);
+          await delay(1000);
+          if (!!newWallets && newWallets.length > 0) {
+            navigateToLoadingScreenChangingWallet();
+          } else {
+            closeModal();
+            closeErrorModal();
+          }
+        }
+      } catch (error) {
+        console.error(`Critical Error delete wallet ${error}`);
+        openErrorModal("Error Delete Wallet", `${error}`);
+        return;
+      }
+    }
+  };
+
+  const submitAction = async () => {
+    if (isSubmittingRef.current) {
+      return;
+    }
+
+    isSubmittingRef.current = true;
+
+    if (!selectedChain) {
+      openErrorModal("Create Wallet", "Please select a Network before creating a wallet.");
+      isSubmittingRef.current = false;
+      return;
+    }
+    if (selectedSelection !== ServerSelectionEnum.auto && (!selectedServer || !selectedSelection)) {
+      openErrorModal("Create Wallet", "Please select a server before creating a wallet.");
+      isSubmittingRef.current = false;
+      return;
+    }
+
+    if (mode === "addnew") {
+      // check the fields — surface WHY nothing happened instead of returning
+      // silently (users saw the Create button do nothing with no message).
+      if (newWalletType === "seed" && (!seedPhrase || !birthday)) {
+        openErrorModal(
+          "Create Wallet",
+          !seedPhrase
+            ? "Please enter your seed phrase."
+            : `Please enter the wallet birthday (if you don't know it, ${activationHeight[selectedChain]} is safe).`,
+        );
+        isSubmittingRef.current = false;
+        return;
+      }
+      if (newWalletType === "ufvk" && (!ufvk || !birthday)) {
+        openErrorModal(
+          "Create Wallet",
+          !ufvk
+            ? "Please enter your unified full viewing key (UFVK)."
+            : `Please enter the wallet birthday (if you don't know it, ${activationHeight[selectedChain]} is safe).`,
+        );
+        isSubmittingRef.current = false;
+        return;
+      }
+      if (newWalletType === "file" && !file) {
+        openErrorModal("Create Wallet", "Please select a wallet file to restore.");
+        isSubmittingRef.current = false;
+        return;
+      }
+      // check the birthday
+      if (
+        (newWalletType === "seed" || newWalletType === "ufvk") &&
+        Number(birthday) < activationHeight[selectedChain]
+      ) {
+        openErrorModal(
+          "Create Wallet",
+          `The wallet birthday must be at least ${activationHeight[selectedChain]} (the network activation height).`,
+        );
+        isSubmittingRef.current = false;
+        return;
+      }
+
+      // run the option
+      if (newWalletType === "new") {
+        openErrorModal("Add New Wallet", "Creating a brand new wallet.");
+        await doCreateNewWallet();
+      }
+      if (newWalletType === "seed") {
+        openErrorModal("Restore Wallet", "Restoring an existing wallet from the seed phrase.");
+        await doRestoreSeedWallet();
+      }
+      if (newWalletType === "ufvk") {
+        openErrorModal("Restore Wallet", "Restoring an existing wallet from the Unified Full Viewing Key.");
+        await doRestoreUfvkWallet();
+      }
+      if (newWalletType === "file") {
+        openErrorModal("Restore Wallet", "Restoring an existing wallet from the DAT file stored.");
+        await doRestoreFileWallet();
+      }
+    }
+
+    if (mode === "settings") {
+      await doSave();
+    }
+    if (mode === "delete") {
+      openErrorModal("Delete Wallet", "Stopping all the activity with the wallet in order to delete it completely.");
+      await doDelete();
+    }
+
+    isSubmittingRef.current = false;
+  };
+
+  const updateSeedPhrase = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setSeedPhrase(e.target.value);
+  };
+
+  const updateUfvk = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setUfvk(e.target.value);
+  };
+
+  const updateFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFile(e.target.value);
+  };
+
+  const updateBirthday = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setBirthday(isNaN(parseInt(e.target.value)) ? "" : e.target.value);
+  };
+
+  const updateAlias = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setAlias(e.target.value);
+  };
+
+  return (
+    <ScrollPaneTop offsetHeight={20}>
+      <div className={`${cstyles.xlarge} ${cstyles.margintopsmall} ${cstyles.center}`}>
+        {mode === "addnew" ? "Add a New Wallet" : mode === "settings" ? "Wallet Settings" : "Delete Wallet"}
+      </div>
+
+      <div className={styles.addnewwalletcontainer}>
+        <div className={`${cstyles.well} ${cstyles.verticalflex}`}>
+          <div
+            className={cstyles.horizontalflex}
+            style={{ margin: "5px 10px", alignItems: "center", flexWrap: "nowrap" }}
+          >
+            <div className={cstyles.sublight}>Wallet Alias/Description</div>
+            <input
+              aria-label="Wallet alias"
+              disabled={mode === "delete"}
+              placeholder="Ex: My Wcash Wallet"
+              type="text"
+              className={cstyles.inputbox}
+              style={{ width: "60%", marginLeft: "20px" }}
+              value={alias}
+              onChange={(e) => updateAlias(e)}
+            />
+            <div className={cstyles.horizontalflex} style={{ margin: "5px 10px", alignItems: "center" }}>
+              Network
+              <select
+                aria-label="Network"
+                disabled={mode !== "addnew"}
+                className={cstyles.inputbox}
+                style={{
+                  marginLeft: "20px",
+                  color: selectedChain === "" ? Utils.getCssVariable("--color-zingo") : undefined,
+                }}
+                value={selectedChain}
+                onChange={(e) => {
+                  setServerExpanded(true);
+                  setSelectedChain(e.target.value as ServerChainNameEnum | "");
+                  if (servers.filter((s) => s.chain_name === e.target.value).length === 0) {
+                    setSelectedSelection(ServerSelectionEnum.custom);
+                    setSelectedServer(customServer);
+                  } else {
+                    if (!customServer && selectedSelection === ServerSelectionEnum.custom) {
+                      setSelectedSelection(ServerSelectionEnum.list);
+                      const ls: string = servers.filter((s) => s.chain_name === e.target.value)[0].uri;
+                      setListServer(ls);
+                      setSelectedServer(ls);
+                    } else {
+                      const ls: string = servers.filter((s) => s.chain_name === e.target.value)[0].uri;
+                      setListServer(ls);
+                      if (selectedSelection === ServerSelectionEnum.list || selectedSelection === "") {
+                        setSelectedSelection(ServerSelectionEnum.list);
+                        setSelectedServer(ls);
+                      }
+                    }
+                  }
+                }}
+              >
+                <option value="" disabled hidden>
+                  Select...
+                </option>
+                <option value="main">{Utils.chainDisplayName(ServerChainNameEnum.mainChainName)}</option>
+                <option value="test">{Utils.chainDisplayName(ServerChainNameEnum.testChainName)}</option>
+                <option value="regtest">{Utils.chainDisplayName(ServerChainNameEnum.regtestChainName)}</option>
+              </select>
+            </div>
+          </div>
+
+          {mode === "addnew" && (
+            <div
+              className={cstyles.horizontalflex}
+              style={{ margin: "5px 10px", alignItems: "center", flexWrap: "nowrap" }}
+            >
+              <div className={cstyles.sublight}>Type of Wallet creation</div>
+              <select
+                aria-label="Type of wallet creation"
+                className={cstyles.inputbox}
+                style={{ width: "80%", marginLeft: "20px" }}
+                value={newWalletType}
+                onChange={(e) => {
+                  setNewWalletType(e.target.value as "new" | "seed" | "ufvk" | "file");
+                }}
+              >
+                <option value="" disabled hidden>
+                  Select...
+                </option>
+                <option value="new">{news["new"]}</option>
+                <option value="seed">{news["seed"]}</option>
+                <option value="ufvk">{news["ufvk"]}</option>
+                <option value="file">{news["file"]}</option>
+              </select>
+            </div>
+          )}
+
+          {newWalletType === "seed" && mode === "addnew" && (
+            <div style={{ margin: "5px 10px" }}>
+              <div className={cstyles.sublight}>Please enter your seed phrase</div>
+              <TextareaAutosize
+                aria-label="Seed phrase"
+                placeholder="Enter your 24 recovery words"
+                className={cstyles.inputbox}
+                value={seedPhrase}
+                onChange={(e) => updateSeedPhrase(e)}
+              />
+              <div className={cstyles.sublight}>
+                {`Wallet Birthday. If you don’t know this, it is OK to enter ‘${activationHeight[selectedChain]}’`}
+              </div>
+              <input
+                aria-label="Wallet birthday"
+                placeholder={`>= ${activationHeight[selectedChain]}`}
+                type="number"
+                className={cstyles.inputbox}
+                value={birthday}
+                onChange={(e) => updateBirthday(e)}
+              />
+            </div>
+          )}
+
+          {newWalletType === "ufvk" && mode === "addnew" && (
+            <div style={{ margin: "5px 10px" }}>
+              <div className={cstyles.sublight}>Please enter your Unified Full Viewing Key</div>
+              <TextareaAutosize
+                aria-label="Unified Full Viewing Key"
+                placeholder="Ex: uview..."
+                className={cstyles.inputbox}
+                value={ufvk}
+                onChange={(e) => updateUfvk(e)}
+              />
+              <div className={cstyles.sublight}>
+                {`Wallet Birthday. If you don’t know this, it is OK to enter ‘${activationHeight[selectedChain]}’`}
+              </div>
+              <input
+                aria-label="Wallet birthday"
+                placeholder={`>= ${activationHeight[selectedChain]}`}
+                type="number"
+                className={cstyles.inputbox}
+                value={birthday}
+                onChange={(e) => updateBirthday(e)}
+              />
+            </div>
+          )}
+
+          {newWalletType === "file" && mode === "addnew" && (
+            <div style={{ margin: "5px 10px" }}>
+              <div className={cstyles.sublight}>Please enter your Wallet File Name stored in the Wcash Wallet folder</div>
+              <input
+                aria-label="Wallet file name"
+                placeholder="Ex: wcash-wallet-renamed....dat"
+                type="text"
+                className={cstyles.inputbox}
+                style={{ width: "90%", marginLeft: "20px" }}
+                value={file}
+                onChange={(e) => updateFile(e)}
+              />
+            </div>
+          )}
+
+          {mode !== "addnew" && (
+            <div
+              className={cstyles.horizontalflex}
+              style={{ margin: "5px 10px", alignItems: "center", flexWrap: "nowrap" }}
+            >
+              <div className={cstyles.sublight}>File Name</div>
+              <input
+                aria-label="File name"
+                disabled={true}
+                type="text"
+                className={cstyles.inputbox}
+                style={{ width: "85%", marginLeft: "20px" }}
+                value={
+                  currentWallet && currentWallet.creationType === CreationTypeEnum.Main ? "wcash-wallet.dat" : file
+                }
+              />
+            </div>
+          )}
+
+          {mode !== "delete" && selectedChain !== "" && (
+            <>
+              <div
+                style={{
+                  width: "120%",
+                  height: "20px",
+                  marginTop: 10,
+                  marginBottom: 10,
+                  marginLeft: "-20px",
+                  backgroundColor: Utils.getCssVariable("--color-background"),
+                }}
+              />
+
+              <div style={{ margin: "5px 10px" }}>
+                {!serverExpanded ? (
+                  <div className={cstyles.horizontalflex}>
+                    <div
+                      className={cstyles.sublight}
+                      style={{ marginRight: "25px", cursor: "pointer" }}
+                      onClick={() => setServerExpanded(!serverExpanded)}
+                    >
+                      Selected Server
+                    </div>
+                    <div
+                      style={{ marginRight: 25, cursor: "pointer", opacity: 0.5 }}
+                      onClick={() => setServerExpanded(!serverExpanded)}
+                    >
+                      <i className={`${"fas"} ${"fa-chevron-down"} ${"fa-1x"}`} />
+                    </div>
+                    <div style={{ cursor: "pointer" }} onClick={() => setServerExpanded(!serverExpanded)}>
+                      {selectedServer}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className={cstyles.horizontalflex}>
+                      <div
+                        className={cstyles.sublight}
+                        style={{ marginRight: "25px", cursor: "pointer" }}
+                        onClick={() => setServerExpanded(!serverExpanded)}
+                      >
+                        Selected Server
+                      </div>
+                      <div
+                        style={{ marginRight: 25, cursor: "pointer", opacity: 0.5 }}
+                        onClick={() => setServerExpanded(!serverExpanded)}
+                      >
+                        <i className={`${"fas"} ${"fa-chevron-up"} ${"fa-1x"}`} />
+                      </div>
+                    </div>
+                    {mode === "settings" && (
+                      <div className={cstyles.horizontalflex} style={{ margin: "5px 10px", alignItems: "center" }}>
+                        <input
+                          checked={selectedSelection === ServerSelectionEnum.auto}
+                          style={{ accentColor: Utils.getCssVariable("--color-primary") }}
+                          type="radio"
+                          name="selection"
+                          value={ServerSelectionEnum.auto}
+                          onClick={() => {
+                            setSelectedSelection(ServerSelectionEnum.auto);
+                            setSelectedServer(autoServer);
+                          }}
+                          onChange={() => {
+                            setSelectedSelection(ServerSelectionEnum.auto);
+                            setSelectedServer(autoServer);
+                          }}
+                        />
+                        Automatic
+                      </div>
+                    )}
+                    {servers.filter((s) => s.chain_name === selectedChain).length > 0 && (
+                      <div className={cstyles.horizontalflex} style={{ margin: "5px 10px", alignItems: "center" }}>
+                        <input
+                          checked={selectedSelection === ServerSelectionEnum.list}
+                          style={{ accentColor: Utils.getCssVariable("--color-primary") }}
+                          type="radio"
+                          name="selection"
+                          value={ServerSelectionEnum.list}
+                          onClick={() => {
+                            setSelectedSelection(ServerSelectionEnum.list);
+                            const ls: string = servers.filter((s) => s.chain_name === selectedChain)[0].uri;
+                            setListServer(ls);
+                            setSelectedServer(ls);
+                          }}
+                          onChange={() => {
+                            setSelectedSelection(ServerSelectionEnum.list);
+                            const ls: string = servers.filter((s) => s.chain_name === selectedChain)[0].uri;
+                            setListServer(ls);
+                            setSelectedServer(ls);
+                          }}
+                        />
+                        List
+                        <select
+                          aria-label="Server list"
+                          disabled={selectedSelection !== "list"}
+                          className={cstyles.inputbox}
+                          style={{ marginLeft: "20px" }}
+                          value={listServer}
+                          onChange={(e) => {
+                            setListServer(e.target.value);
+                            setSelectedServer(e.target.value);
+                          }}
+                        >
+                          <option key="" value="" disabled hidden></option>
+                          {servers
+                            .filter((s) => s.chain_name === selectedChain)
+                            .map((s: ServerClass) => (
+                              <option key={s.uri} value={s.uri}>
+                                {s.uri +
+                                  " - " +
+                                  Utils.chainDisplayName(s.chain_name) +
+                                  (s.latency ? " _ " + s.latency + " ms." : "")}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
+                    <div style={{ margin: "5px 10px" }}>
+                      <input
+                        checked={selectedSelection === "custom"}
+                        style={{ accentColor: Utils.getCssVariable("--color-primary") }}
+                        type="radio"
+                        name="selection"
+                        value={"custom"}
+                        onClick={() => {
+                          setSelectedSelection(ServerSelectionEnum.custom);
+                          setSelectedServer(customServer);
+                        }}
+                        onChange={() => {
+                          setSelectedSelection(ServerSelectionEnum.custom);
+                          setSelectedServer(customServer);
+                        }}
+                      />
+                      Custom
+                      <div className={`${cstyles.well} ${cstyles.horizontalflex}`}>
+                        <div style={{ width: "75%", padding: 0, margin: 0, flexWrap: "nowrap" }}>
+                          URI
+                          <input
+                            aria-label="Custom server URI"
+                            placeholder="https://------.---:---"
+                            disabled={selectedSelection !== "custom"}
+                            type="text"
+                            className={cstyles.inputbox}
+                            style={{ marginLeft: "20px", width: "80%" }}
+                            value={customServer}
+                            onChange={(e) => {
+                              setCustomServer(e.target.value);
+                              setSelectedServer(e.target.value);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+
+          <div
+            style={{
+              width: "120%",
+              height: "20px",
+              marginTop: 10,
+              marginBottom: 10,
+              marginLeft: "-20px",
+              backgroundColor: Utils.getCssVariable("--color-background"),
+            }}
+          />
+
+          <div
+            className={cstyles.horizontalflex}
+            style={{ margin: "5px 10px", alignItems: "center", flexWrap: "nowrap" }}
+          >
+            <div className={cstyles.sublight}>Sync Performance Level</div>
+            <select
+              aria-label="Sync performance level"
+              disabled={mode === "delete"}
+              className={cstyles.inputbox}
+              style={{ width: "80%", marginLeft: "20px" }}
+              value={performanceLevel}
+              onChange={(e) => {
+                setPerformanceLevel(e.target.value as PerformanceLevelEnum);
+              }}
+            >
+              <option value="" disabled hidden>
+                Select...
+              </option>
+              <option value={PerformanceLevelEnum.Low}>{PerformanceLevelEnum.Low}</option>
+              <option value={PerformanceLevelEnum.Medium}>{PerformanceLevelEnum.Medium}</option>
+              <option value={PerformanceLevelEnum.High}>{PerformanceLevelEnum.High}</option>
+              <option value={PerformanceLevelEnum.Maximum}>{PerformanceLevelEnum.Maximum}</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: "10px" }} className={cstyles.buttoncontainer}>
+          <button type="button" className={cstyles.primarybutton} onClick={() => closeModal()}>
+            Cancel
+          </button>
+          <button type="button" className={cstyles.primarybutton} onClick={async () => await submitAction()}>
+            {mode === "addnew"
+              ? newWalletType === "new"
+                ? "Create Wallet"
+                : "Restore Wallet"
+              : mode === "settings"
+                ? "Save Wallet Settings"
+                : "Delete Wallet"}
+          </button>
+        </div>
+      </div>
+    </ScrollPaneTop>
+  );
+};
+
+export default AddNewWallet;

@@ -1,0 +1,160 @@
+name: Wcash Mainnet desktop candidates
+
+on:
+  push:
+    branches: [dev]
+    tags: ['wcash-desktop-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-candidate:
+    name: ${{ matrix.platform }} unsigned candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-26
+            target: aarch64-apple-darwin
+            script: package:mainnet:mac-arm64
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            script: package:mainnet:linux-x64
+          - platform: windows-x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            script: package:mainnet:windows-x64
+          - platform: windows-arm64
+            runner: windows-11-vs2026-arm
+            target: aarch64-pc-windows-msvc
+            script: package:mainnet:windows-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    steps:
+      - name: Check out the wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential clang cmake libsecret-1-dev libssl-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@8d8cc9a8e0d47b64af669de71110e76860d6afbd
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+
+      - name: Install Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: '36.1'
+
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build and inspect the Mainnet package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          LZMA_API_STATIC: '1'
+        run: yarn ${{ matrix.script }}
+
+      - name: Record source and checksums
+        run: node scripts/write-wcash-mainnet-candidate-manifest.js
+
+      - name: Upload the unsigned candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wcash-mainnet-desktop-${{ matrix.platform }}-unsigned
+          path: |
+            dist/mainnet-candidate/*.zip
+            dist/mainnet-candidate/*.AppImage
+            dist/mainnet-candidate/*.deb
+            dist/mainnet-candidate/MANIFEST.json
+            dist/mainnet-candidate/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  github-prerelease:
+    name: Publish the verified GitHub prerelease
+    if: startsWith(github.ref, 'refs/tags/wcash-desktop-')
+    needs: unsigned-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify the immutable release tag
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          build="$(node -p "require('./config/electron-builder.mainnet-candidate.js').buildVersion")"
+          expected="wcash-desktop-${version}-${build}"
+          test "$GITHUB_REF_NAME" = "$expected"
+          test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+
+      - name: Download the native build artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          pattern: wcash-mainnet-desktop-*-unsigned
+          path: ${{ runner.temp }}/wcash-desktop-components
+
+      - name: Assemble and verify the release payload
+        id: payload
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/wcash-desktop-release"
+          mkdir -p "$stage"
+          find "$RUNNER_TEMP/wcash-desktop-components" -type f \
+            \( -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) \
+            -exec cp '{}' "$stage/" \;
+          mapfile -t packages < <(find "$stage" -maxdepth 1 -type f | sort)
+          test "${#packages[@]}" -eq 5
+          test "$(find "$stage" -maxdepth 1 -type f -name '*mac-arm64.zip' | wc -l)" -eq 1
+          test "$(find "$stage" -maxdepth 1 -type f -name '*linux-x86_64.AppImage' | wc -l)" -eq 1
+          test "$(find "$stage" -maxdepth 1 -type f -name '*linux-amd64.deb' | wc -l)" -eq 1
+          test "$(find "$stage" -maxdepth 1 -type f -name '*win-x64.zip' | wc -l)" -eq 1
+          test "$(find "$stage" -maxdepth 1 -type f -name '*win-arm64.zip' | wc -l)" -eq 1
+          (cd "$stage" && sha256sum ./* > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+          printf '%s\n' \
+            "repository=${GITHUB_REPOSITORY}" \
+            "tag=${GITHUB_REF_NAME}" \
+            "source=${GITHUB_SHA}" \
+            "workflow=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            > "$stage/SOURCE.txt"
+          echo "path=$stage" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PATH: ${{ steps.payload.outputs.path }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Wcash Wallet desktop mainnet candidate built from \`${GITHUB_SHA}\`.
+
+          This is a prerelease for review. The macOS and Windows packages are unsigned, and the macOS package is not notarized. Operating-system security prompts are expected. Verify the matching SHA-256 value in \`SHA256SUMS.txt\` before testing.
+
+          Included targets: macOS Apple silicon, Linux x64 (AppImage and Debian), Windows x64, and Windows ARM64.
+          EOF
+          gh release create "$GITHUB_REF_NAME" "$RELEASE_PATH"/* \
+            --verify-tag \
+            --prerelease \
+            --title "Wcash Wallet desktop ${GITHUB_REF_NAME#wcash-desktop-} candidate" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

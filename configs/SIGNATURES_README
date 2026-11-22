@@ -1,0 +1,9 @@
+Wcash Wallet release signing is not configured in this repository.
+
+The Local Regtest QA workflows create explicitly labelled UNSIGNED candidates
+and upload them only as short-lived workflow artifacts. They do not publish a
+release and do not read signing credentials.
+
+Production signing, notarization, App Store, Microsoft Store, and release
+publishing must remain disabled until Wcash-owned identities are reviewed and
+added in a separate change.

@@ -1,0 +1,26 @@
+.receivecontainer {
+  margin: 16px;
+}
+
+.containermargin {
+  margin: 16px;
+  margin-top: 5px;
+  margin-left: 5px;
+  margin-right: 5px;
+}
+
+.receiveblock {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.receiveDetail {
+  margin-top: 16px;
+}
+
+.receiveQrcode {
+  padding: 0px;
+  background-color: var(--color-text);
+  margin: 5px;
+}

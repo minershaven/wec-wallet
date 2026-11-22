@@ -1,0 +1,14 @@
+{
+  "LOADING": "/",
+  "HOME": "/home",
+  "DASHBOARD": "/dashboard",
+  "SEND": "/send",
+  "RECEIVE": "/receive",
+  "ADDRESSBOOK": "/addressbook",
+  "HISTORY": "/history",
+  "MESSAGES": "/messages",
+  "ADDNEWWALLET": "/addnewwallet",
+  "SETTINGSWALLET": "/settingswallet",
+  "INSIGHT": "/insight",
+  "MIGRATION": "/migration"
+}
