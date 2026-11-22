@@ -60,7 +60,10 @@ const PAGE = `<!doctype html>
  */
 function waitForWcashNode({ status, appendLog = () => {} }) {
   const initial = status();
-  if (!initial.enabled || initial.state === "external" || initial.state === "synced") {
+  // Only the first full sync is waited for. Once this PC's node has synced before, the wallet opens straight
+  // away and the node catches up in the background (the status line shows its progress).
+  if (!initial.enabled || initial.state === "external" || initial.state === "synced" || initial.initialSyncDone) {
+    appendLog(initial.initialSyncDone ? "node has synced before: opening the wallet while it catches up" : "not waiting for the node");
     return Promise.resolve(true);
   }
 

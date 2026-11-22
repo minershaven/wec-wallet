@@ -42,6 +42,18 @@ const MAX_LOG_BYTES = 20 * 1024 * 1024;
 const MAX_RESTARTS = 5;
 const RESTART_DELAY_MS = 5000;
 
+// Written once the node has finished its first full sync. Later starts then open the wallet straight away and
+// let the node catch up in the background, instead of showing the sync window every time.
+const INITIAL_SYNC_MARKER = "initial-sync-done";
+
+// Stall watchdog. A Wcash block comes about every 75 seconds, so no new block for 6 minutes while the node is
+// running (about a 1% chance on a healthy network) usually means it lost its peers, for example after a
+// network outage, and it can take a long time to find them again by itself. A clean restart re-dials the
+// known peers straight away. At most once every 15 minutes, so a quiet network can't cause a restart loop.
+const STALL_AFTER_MS = 6 * 60 * 1000;
+const STALL_CHECK_MS = 30 * 1000;
+const MIN_STALL_RESTART_GAP_MS = 15 * 60 * 1000;
+
 const status = {
   enabled: false,
   state: "idle", // idle | starting | syncing | synced | external | stopped | error
@@ -51,12 +63,21 @@ const status = {
   peers: null,
   error: null,
   updatedAt: null,
+  // true once this PC's node has completed a full sync at least once
+  initialSyncDone: false,
+  stallRestarts: 0,
 };
 
 let child = null;
 let stopping = false;
+let restartRequested = false;
 let restarts = 0;
 let logStream = null;
+let dataDirInUse = null;
+let exeInUse = null;
+let lastHeightChange = Date.now();
+let lastStallRestart = 0;
+let stallTimer = null;
 
 const setStatus = (patch) => Object.assign(status, patch, { updatedAt: Date.now() });
 
@@ -126,7 +147,10 @@ function parseLogLine(line) {
   const peers = line.match(/(?:ready_peers|open_peers|num_ready_peers)=(\d+)/);
   const patch = {};
   if (percent) patch.percent = Math.min(100, Number(percent[1]));
-  if (height) patch.height = Number(height[1]);
+  if (height) {
+    patch.height = Number(height[1]);
+    if (patch.height !== status.height) lastHeightChange = Date.now();
+  }
   if (remaining) patch.remaining = Number(remaining[1]);
   if (peers) patch.peers = Number(peers[1]);
   if (/finished initial sync to chain tip/.test(line)) {
@@ -136,6 +160,17 @@ function parseLogLine(line) {
     patch.state = Number(percent[1]) >= 99.9 ? "synced" : "syncing";
   }
   if (Object.keys(patch).length) setStatus(patch);
+  if (status.state === "synced" && !status.initialSyncDone) markInitialSyncDone();
+}
+
+function markInitialSyncDone() {
+  status.initialSyncDone = true;
+  if (!dataDirInUse) return;
+  try {
+    fs.writeFileSync(path.join(dataDirInUse, INITIAL_SYNC_MARKER), `${new Date().toISOString()} height ${status.height}\n`);
+  } catch {
+    // without the marker the next start just shows the sync window again
+  }
 }
 
 function openLog(dataDir) {
@@ -153,7 +188,11 @@ function openLog(dataDir) {
 function launch(exe, dataDir) {
   const config = writeConfig(dataDir);
   logStream = logStream || openLog(dataDir);
-  setStatus({ state: "starting", error: null });
+  exeInUse = exe;
+  dataDirInUse = dataDir;
+  lastHeightChange = Date.now();
+  // a node that has synced before goes straight to "syncing" (catching up), never back to "starting"
+  setStatus({ state: status.initialSyncDone ? "syncing" : "starting", error: null });
 
   child = spawn(exe, ["-c", config, "start"], {
     cwd: dataDir,
@@ -190,6 +229,12 @@ function launch(exe, dataDir) {
       closeLog();
       return;
     }
+    if (restartRequested) {
+      // the stall watchdog stopped it on purpose: start again right away
+      restartRequested = false;
+      launch(exe, dataDir);
+      return;
+    }
     if (restarts < MAX_RESTARTS) {
       restarts += 1;
       setStatus({ state: "starting", error: `The Wcash node stopped (code ${code ?? signal}); restarting.` });
@@ -223,8 +268,10 @@ async function startWcashNode({ resourcesPath, isPackaged, profileId }) {
 
     const dataDir = nodeDataDir();
     fs.mkdirSync(dataDir, { recursive: true });
+    status.initialSyncDone = fs.existsSync(path.join(dataDir, INITIAL_SYNC_MARKER));
     stopping = false;
     launch(exe, dataDir);
+    startStallWatchdog();
   } catch (err) {
     setStatus({ state: "error", error: `The Wcash node could not start: ${err.message}` });
   }
@@ -254,6 +301,52 @@ function ctrlCHelperScript(pid) {
   ].join("\r\n");
 }
 
+function ctrlCHelperArgs(pid) {
+  const encoded = Buffer.from(ctrlCHelperScript(pid), "utf16le").toString("base64");
+  return ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
+}
+
+function startStallWatchdog() {
+  if (stallTimer) return;
+  stallTimer = setInterval(() => {
+    // only once the node has synced before: during a first sync the chain download has its own pace
+    if (stopping || restartRequested || !child || !status.initialSyncDone) return;
+    const now = Date.now();
+    if (now - lastHeightChange < STALL_AFTER_MS || now - lastStallRestart < MIN_STALL_RESTART_GAP_MS) return;
+    restartStalledNode(now);
+  }, STALL_CHECK_MS);
+  stallTimer.unref?.();
+}
+
+// Clean restart without blocking the app: Ctrl+C, and a hard kill only if the node hasn't exited in 30 s.
+// The exit handler sees restartRequested and starts the node again.
+function restartStalledNode(now) {
+  const node = child;
+  const pid = node.pid;
+  lastStallRestart = now;
+  restartRequested = true;
+  setStatus({
+    state: "syncing",
+    stallRestarts: status.stallRestarts + 1,
+    error: "No new Wcash block for 6 minutes; restarting the built-in node to reconnect.",
+  });
+  try {
+    if (logStream) logStream.write(`\n[wcash-wallet] ${new Date().toISOString()} no new block for 6 minutes; restarting the node\n`);
+  } catch {
+    // the log is best-effort
+  }
+  require("child_process").execFile("powershell.exe", ctrlCHelperArgs(pid), { windowsHide: true, timeout: 15000 }, () => {});
+  setTimeout(() => {
+    if (child === node && processAlive(pid)) {
+      try {
+        node.kill();
+      } catch {
+        // already gone
+      }
+    }
+  }, GRACEFUL_STOP_MS);
+}
+
 function processAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -276,15 +369,18 @@ const GRACEFUL_STOP_MS = 30000;
  */
 function stopWcashNode() {
   stopping = true;
+  if (stallTimer) {
+    clearInterval(stallTimer);
+    stallTimer = null;
+  }
   if (child && child.pid && processAlive(child.pid)) {
     const pid = child.pid;
     try {
-      const encoded = Buffer.from(ctrlCHelperScript(pid), "utf16le").toString("base64");
-      require("child_process").execFileSync(
-        "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-        { windowsHide: true, stdio: "ignore", timeout: 15000 },
-      );
+      require("child_process").execFileSync("powershell.exe", ctrlCHelperArgs(pid), {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 15000,
+      });
     } catch {
       // the helper failed; the hard kill below still stops the node
     }

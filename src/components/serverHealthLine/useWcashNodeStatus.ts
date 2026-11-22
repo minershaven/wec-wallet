@@ -11,6 +11,7 @@ export type WcashNodeStatus = {
   percent: number | null;
   remaining: number | null;
   error: string | null;
+  initialSyncDone?: boolean;
 };
 
 const POLL_MS = 3000;
@@ -45,6 +46,15 @@ export function describeWcashNode(status: WcashNodeStatus): { text: string; leve
     case "synced":
       return { text: `Wcash node · synced${block}`, level: "ok", tooltip: "Your built-in Wcash node is up to date." };
     case "syncing": {
+      if (status.initialSyncDone) {
+        return {
+          text: `Wcash node · catching up${block}`,
+          level: "unstable",
+          tooltip:
+            status.error ||
+            "Your built-in Wcash node is fetching the blocks mined since it last ran. New transactions show up once it has caught up.",
+        };
+      }
       const pct = status.percent !== null ? ` ${status.percent.toFixed(1)}%` : "";
       return {
         text: `Wcash node · syncing${pct}${block}`,
