@@ -79,9 +79,11 @@ jobs:
           network = "WcashMainnet"
           listen_addr = "127.0.0.1:48233"
           cache_dir = '$data\peers'
+          initial_mainnet_peers = ["node.w.cash:48233", "187.124.113.200:48233", "2.24.93.205:48233", "5.183.8.145:48233", "node.wcash.net:48233", "node.wcash.io:48233", "node.wcash.space:48233", "169.58.115.146:48233"]
 
           [state]
           cache_dir = '$data\state'
+          should_backup_non_finalized_state = false
 
           [rpc]
           lightwalletd_listen_addr = "127.0.0.1:48234"
@@ -98,6 +100,7 @@ jobs:
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           $log = (Get-Content "$data\out.log" -Raw) + (Get-Content "$data\err.log" -Raw)
           ($log -split "`n" | Select-Object -Last 40) -join "`n"
+          if ($log -match "non-finalized state backup") { throw "non-finalized state backup still enabled" }
           if (-not $listening) { throw "the lightwalletd feed was not listening on 127.0.0.1:48234" }
           if ($log -notmatch "sync_percent=") { throw "no sync progress reported" }
           if ($log -match "sync_percent=0\.000%" -and $log -notmatch "sync_percent=[0-9]*[1-9]") { Write-Warning "no blocks synced in 2 minutes" }

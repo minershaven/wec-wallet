@@ -25,6 +25,19 @@ const { spawn } = require("child_process");
 const LIGHTWALLETD_HOST = "127.0.0.1";
 const LIGHTWALLETD_PORT = 48234;
 const P2P_LISTEN = "127.0.0.1:48233";
+// Setting initial_mainnet_peers replaces the node's built-in list, so the
+// built-in Wcash Mainnet seeds (w-cash/wolf zebra-network/src/config.rs) are
+// repeated here, followed by the Miners Haven pool's node.
+const INITIAL_PEERS = [
+  "node.w.cash:48233",
+  "187.124.113.200:48233",
+  "2.24.93.205:48233",
+  "5.183.8.145:48233",
+  "node.wcash.net:48233",
+  "node.wcash.io:48233",
+  "node.wcash.space:48233",
+  "169.58.115.146:48233",
+];
 const MAX_LOG_BYTES = 20 * 1024 * 1024;
 const MAX_RESTARTS = 5;
 const RESTART_DELAY_MS = 5000;
@@ -66,6 +79,8 @@ function writeConfig(dataDir) {
     'network = "WcashMainnet"',
     `listen_addr = "${P2P_LISTEN}"`,
     `cache_dir = ${tomlPath(path.join(dataDir, "peers"))}`,
+    "# Built-in Wcash seeds, plus the Miners Haven pool's Wcash node as an extra known peer.",
+    `initial_mainnet_peers = [${INITIAL_PEERS.map((p) => JSON.stringify(p)).join(", ")}]`,
     "",
     "[state]",
     `cache_dir = ${tomlPath(path.join(dataDir, "state"))}`,
