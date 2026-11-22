@@ -14,6 +14,7 @@ const {
   selectWcashRuntimeProfile,
 } = require("./wcashRuntimeProfile");
 const { startWcashNode, stopWcashNode, wcashNodeStatus } = require("./wcashNode");
+const { waitForWcashNode } = require("./wcashNodeSplash");
 
 const packageMetadata = require("../package.json");
 const wcashProfile = selectWcashRuntimeProfile({
@@ -2416,6 +2417,13 @@ app.whenReady().then(async () => {
   appendStartupLog("checking Linux package migration");
   await maybeRunDebAppImageToFlatpakMigration();
   appendStartupLog("Linux package migration check finished");
+
+  // All-in-one build: let the bundled node finish its initial sync before the
+  // wallet syncs from it (shows a progress window; "Open wallet now" skips).
+  if (!(await waitForWcashNode({ status: wcashNodeStatus, appendLog: appendStartupLog }))) {
+    app.quit();
+    return;
+  }
 
   appendStartupLog("creating main window");
   createWindow();
