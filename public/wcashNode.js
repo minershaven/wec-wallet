@@ -164,7 +164,13 @@ function launch(exe, dataDir) {
   let pending = "";
   const onData = (chunk) => {
     const text = chunk.toString();
-    logStream.write(text);
+    // The node keeps printing while it shuts down; never let logging throw in
+    // the main process (it would show a JavaScript error dialog on quit).
+    try {
+      if (logStream) logStream.write(text);
+    } catch {
+      // the log is best-effort
+    }
     pending += text;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop();
@@ -181,6 +187,7 @@ function launch(exe, dataDir) {
     child = null;
     if (stopping) {
       setStatus({ state: "stopped" });
+      closeLog();
       return;
     }
     if (restarts < MAX_RESTARTS) {
@@ -291,13 +298,20 @@ function stopWcashNode() {
       }
     }
   }
-  if (logStream) {
+  // With a node still running, its exit handler closes the log after the last
+  // shutdown lines are written.
+  if (!child) closeLog();
+}
+
+function closeLog() {
+  const stream = logStream;
+  logStream = null;
+  if (stream) {
     try {
-      logStream.end();
+      stream.end();
     } catch {
       // ignore
     }
-    logStream = null;
   }
 }
 
