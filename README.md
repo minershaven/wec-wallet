@@ -4,10 +4,6 @@ This repository builds **Wcash Wallet** for Windows with its own **Wcash node bu
 Install it, open it, and it runs a Wcash Mainnet node in the background and syncs the
 wallet from that node. No server, command line or Linux needed.
 
-- **Wallet:** the official Wcash Wallet desktop app ([w-cash/wallet-desktop](https://github.com/w-cash/wallet-desktop)
-  @ `d6067d48`), unchanged apart from where it syncs from.
-- **Node:** `wcash-zebrad.exe`, built from [w-cash/wolf](https://github.com/w-cash/wolf) (pinned commit in
-  `.github/workflows/windows-allinone.yml`, recorded in `resources\node\SOURCE.txt` of every install).
 
 ## How the bundled node runs
 
@@ -36,15 +32,6 @@ Wcash Wallet desktop is an experimental desktop client for Wcash (WEC). It
 preserves the upstream Zingo PC 2.0.25 user interface and routes wallet
 operations through the Wcash core adapter.
 
-> [!WARNING]
-> The only published desktop packages are **unsigned developer Mainnet
-> candidates**. They are prereleases, have not passed the release qualification
-> gates, and are unsupported for material funds. They connect to the wallet
-> service over plaintext HTTP, so network traffic is not authenticated or
-> encrypted. A network or service attacker may be able to observe or alter data.
-
-These packages are available for developer review and testing. Their existence
-does not certify the wallet as safe, supported, or ready for production use.
 
 ## Current published candidate
 
@@ -57,38 +44,8 @@ Its published
 records Wcash Mainnet, the endpoint `http://mainnet.zecwec.com:48234`,
 `tls: false`, and `signing: "unsigned candidate"`.
 
-| Platform | Published package | Architecture | Install and trust limits |
-| --- | --- | --- | --- |
-| macOS | ZIP | Apple silicon (arm64) only | Unsigned and not notarized; no Intel build or trusted installer |
-| Windows | ZIP | x64 and arm64 | Unsigned archive only; no signed installer or Microsoft Store package |
-| Linux | AppImage and Debian package | x86_64/amd64 only | Unsigned; no distribution repository or detached publisher signature |
 
-There is no supported stable desktop release. Test only on a disposable wallet
-and environment, and do not rely on a candidate for recovery or access to funds.
-See [SUPPORT.md](SUPPORT.md) for the current support boundary and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
-## Verify a downloaded candidate
-
-Download the package and the release's
-[`SHA256SUMS.txt`](https://github.com/w-cash/wallet-desktop/releases/download/wcash-desktop-2.0.25-181/SHA256SUMS.txt),
-then compare the package SHA-256 value before opening it. For example:
-
-```bash
-shasum -a 256 Wcash-Wallet-MAINNET-UNSIGNED-2.0.25-181-mac-arm64.zip
-```
-
-On Linux, `sha256sum <filename>` provides the same type of check. Also inspect
-the release's
-[`SOURCE.txt`](https://github.com/w-cash/wallet-desktop/releases/download/wcash-desktop-2.0.25-181/SOURCE.txt)
-and manifest, and compare their full source revision with the release tag.
-
-SHA-256 checksums can detect a corrupted or changed download relative to the
-published checksum file. Because this release has no signed checksum, manifest,
-or other publisher trust root, those files do **not** authenticate the publisher
-or prove that a package is safe.
-
-## Development and Local Regtest QA
 
 Prerequisites are Node.js 22, Yarn 1.22.22, Rust 1.91, CMake, OpenSSL, and
 protoc 36.1.
