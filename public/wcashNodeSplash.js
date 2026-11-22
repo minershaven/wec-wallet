@@ -75,7 +75,15 @@ function waitForWcashNode({ status, appendLog = () => {} }) {
       title: "Wcash Wallet",
       backgroundColor: "#101418",
       autoHideMenuBar: true,
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        // Own in-memory session: the wallet's default session adds a strict
+        // Content-Security-Policy to every page, which blocks this window's
+        // inline styles and script. This page loads nothing from anywhere.
+        partition: "wcash-node-splash",
+      },
     });
     win.setMenu(null);
     appendLog("waiting for the bundled Wcash node to sync");
