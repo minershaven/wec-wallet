@@ -107,6 +107,7 @@ const ALLOWED_RECEIVE = new Set([
 
 // Allowed IPC channels that renderer → main can invoke/send.
 const ALLOWED_INVOKE = new Set([
+  "wcashNode:status",
   "loadSettings",
   "saveSettings",
   "wallets:all",

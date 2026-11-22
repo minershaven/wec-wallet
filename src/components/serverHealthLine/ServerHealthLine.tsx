@@ -7,6 +7,7 @@ import routes from "../../constants/routes.json";
 import { ServerSelectionEnum } from "../appstate";
 import { ServerHealthLevel, deriveServerHealth } from "../../rpc/components/serverHealth";
 import { rotationCandidates } from "../../utils/pickRotationTarget";
+import { describeWcashNode, useWcashNodeStatus } from "./useWcashNodeStatus";
 
 // Colour lives on the dot alone. The URI and the mode badge stay in body text,
 // so the one coloured thing on the line is the one thing that means something.
@@ -42,6 +43,7 @@ const ServerHealthLine: React.FC = () => {
   const { currentWallet, info, serverHealth, openConfirmModal, openErrorModal, rotateServer, avoidedServers } =
     useContext(ContextApp);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const nodeStatus = useWcashNodeStatus();
 
   if (!currentWallet) {
     return null;
@@ -51,7 +53,11 @@ const ServerHealthLine: React.FC = () => {
   // URI while the session is perfectly well connected. Falling back to the one
   // the server itself reports keeps the line from vanishing in that case.
   const uri: string = currentWallet.uri || info.serverUri || "";
-  const level: ServerHealthLevel = deriveServerHealth(serverHealth);
+  // All-in-one build: describe the built-in node instead of the loopback URI.
+  const node = nodeStatus ? describeWcashNode(nodeStatus) : null;
+  const serverLevel: ServerHealthLevel = deriveServerHealth(serverHealth);
+  const level: ServerHealthLevel = node && serverLevel !== "down" ? node.level : serverLevel;
+  const tooltip: string = node ? node.tooltip : DOT_TOOLTIP[level];
   const mode: ServerSelectionEnum = currentWallet.selection;
 
   const onClick = async () => {
@@ -75,18 +81,18 @@ const ServerHealthLine: React.FC = () => {
   return (
     <>
       <button type="button" className={styles.line} onClick={onClick} aria-label="Active server health">
-        <span className={styles.uri}>{uri}</span>
-        {mode && <span className={styles.badge}>{mode}</span>}
+        <span className={styles.uri} title={node ? uri : undefined}>{node ? node.text : uri}</span>
+        {mode && !node && <span className={styles.badge}>{mode}</span>}
         {/* The dot carries the tooltip itself, so it is the thing you hover and
             the thing that explains itself. */}
         <span
           className={styles.dot}
           style={{ color: DOT_COLOUR[level] }}
-          title={DOT_TOOLTIP[level]}
+          title={tooltip}
           data-health={level}
           data-testid="server-health-dot"
           role="img"
-          aria-label={DOT_TOOLTIP[level]}
+          aria-label={tooltip}
         />
       </button>
       <ServerPickerModal
