@@ -69,6 +69,9 @@ function writeConfig(dataDir) {
     "",
     "[state]",
     `cache_dir = ${tomlPath(path.join(dataDir, "state"))}`,
+    "# The non-finalized backup needs durable directory publication, which Windows lacks;",
+    "# left on, it fails and logs a warning several times a second.",
+    "should_backup_non_finalized_state = false",
     "",
     "[rpc]",
     "# No JSON-RPC listener: only the wallet's compact-block feed, on loopback.",
@@ -205,14 +208,72 @@ async function startWcashNode({ resourcesPath, isPackaged, profileId }) {
   }
 }
 
-/** Stop the node. Safe to call more than once and from a process 'exit' handler. */
+// Ctrl+C for a windowless console process: a hidden helper attaches to the
+// node's console and raises CTRL_C_EVENT there. zebrad then shuts down cleanly
+// (flushes its database). A hard kill instead can leave the chain database
+// unusable, and the node would re-download the whole chain on the next start.
+function ctrlCHelperScript(pid) {
+  return [
+    "$sig = @'",
+    "using System; using System.Runtime.InteropServices;",
+    "public static class WcashCtl {",
+    '  [DllImport("kernel32.dll")] public static extern bool FreeConsole();',
+    '  [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid);',
+    '  [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr h, bool add);',
+    '  [DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint ev, uint group);',
+    "}",
+    "'@",
+    "Add-Type $sig",
+    "[WcashCtl]::FreeConsole() | Out-Null",
+    `if (-not [WcashCtl]::AttachConsole(${Number(pid)})) { exit 2 }`,
+    "[WcashCtl]::SetConsoleCtrlHandler([IntPtr]::Zero, $true) | Out-Null",
+    "if (-not [WcashCtl]::GenerateConsoleCtrlEvent(0, 0)) { exit 3 }",
+    "exit 0",
+  ].join("\r\n");
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+const GRACEFUL_STOP_MS = 30000;
+
+/**
+ * Stop the node: Ctrl+C first, hard kill only if it has not exited in 30 s.
+ * Synchronous so it also works from a process 'exit' handler. Safe to call
+ * more than once.
+ */
 function stopWcashNode() {
   stopping = true;
-  if (child) {
+  if (child && child.pid && processAlive(child.pid)) {
+    const pid = child.pid;
     try {
-      child.kill();
+      const encoded = Buffer.from(ctrlCHelperScript(pid), "utf16le").toString("base64");
+      require("child_process").execFileSync(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+        { windowsHide: true, stdio: "ignore", timeout: 15000 },
+      );
     } catch {
-      // already gone
+      // the helper failed; the hard kill below still stops the node
+    }
+    const deadline = Date.now() + GRACEFUL_STOP_MS;
+    while (processAlive(pid) && Date.now() < deadline) sleepSync(200);
+    if (processAlive(pid)) {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
     }
   }
   if (logStream) {

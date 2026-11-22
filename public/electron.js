@@ -1913,6 +1913,16 @@ function createWindow() {
       appendStartupLog(`did-fail-load code=${code} desc=${desc} url=${url}`),
     );
     mainWindow.webContents.on("dom-ready", () => appendStartupLog("dom-ready"));
+    // Wallet errors (console.error/warn in the renderer) go to startup.log so
+    // problems can be diagnosed from the file. Messages only, no wallet data
+    // is logged by these call sites; long messages are truncated.
+    mainWindow.webContents.on("console-message", (event, levelArg, messageArg) => {
+      const level = typeof event?.level === "string" ? event.level : levelArg;
+      const message = typeof event?.message === "string" ? event.message : messageArg;
+      if (level === "error" || level === "warning" || level === 3 || level === 2) {
+        appendStartupLog(`renderer ${level}: ${String(message).slice(0, 500)}`);
+      }
+    });
     mainWindow.webContents.on("render-process-gone", (_e, details) =>
       appendStartupLog(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`),
     );
