@@ -1,3 +1,35 @@
+# Wcash Wallet — all-in-one for Windows (wallet + node)
+
+This repository builds **Wcash Wallet** for Windows with its own **Wcash node built in**.
+Install it, open it, and it runs a Wcash Mainnet node in the background and syncs the
+wallet from that node. No server, command line or Linux needed.
+
+- **Wallet:** the official Wcash Wallet desktop app ([w-cash/wallet-desktop](https://github.com/w-cash/wallet-desktop)
+  @ `d6067d48`), unchanged apart from where it syncs from.
+- **Node:** `wcash-zebrad.exe`, built from [w-cash/wolf](https://github.com/w-cash/wolf) (pinned commit in
+  `.github/workflows/windows-allinone.yml`, recorded in `resources\node\SOURCE.txt` of every install).
+
+## How the bundled node runs
+
+- Started hidden by the wallet (`public/wcashNode.js`) and stopped when the wallet closes.
+- Node data: `%LOCALAPPDATA%\Wcash Wallet\node-mainnet` (log: `zebrad.log` there).
+- The wallet syncs from the node's light-wallet feed on `127.0.0.1:48234` only. The node's JSON-RPC
+  (admin/mining) server is not enabled, and the P2P port listens on loopback, so Windows never asks to
+  open a firewall port. Outbound connections to Wcash peers work normally.
+- The first start downloads the Wcash chain; the wallet's balance is complete once the node has synced.
+- If something is already serving `127.0.0.1:48234`, the wallet uses it and does not start a second node.
+
+## Downloads
+
+Every push to `main` builds the installer in GitHub Actions (**Actions → Windows all-in-one**).
+Tagging `vX.Y.Z` publishes it as a GitHub release with `SHA256SUMS.txt`.
+The installer is not code-signed, so Windows SmartScreen shows a warning on first run.
+
+Both upstream projects describe themselves as experimental software. Use small amounts and keep your
+24-word recovery phrase safe.
+
+---
+
 # Wcash Wallet desktop
 
 Wcash Wallet desktop is an experimental desktop client for Wcash (WEC). It

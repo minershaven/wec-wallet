@@ -1,0 +1,244 @@
+name: Windows all-in-one (wallet + node)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Wcash node source (w-cash/wolf). Bump deliberately; the commit is recorded in the package.
+  WOLF_REPO: w-cash/wolf
+  WOLF_COMMIT: 0b3ff1fd7bfa77ae959c55d4ea57d212c4de0cfa
+
+jobs:
+  node:
+    name: Wcash node (wcash-zebrad.exe)
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - name: Check out the Wcash node source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ env.WOLF_REPO }}
+          ref: ${{ env.WOLF_COMMIT }}
+          path: wolf
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "36.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the pinned Rust toolchain
+        working-directory: wolf
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wolf
+          key: wolf-${{ env.WOLF_COMMIT }}
+
+      - name: Build zebrad (Wcash Mainnet consensus)
+        working-directory: wolf
+        shell: pwsh
+        env:
+          # Static C runtime: the node runs from resources\node\ without VC++ DLLs.
+          RUSTFLAGS: -C target-feature=+crt-static
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: >
+          cargo build --locked --release -p zebrad --bin zebrad
+          --no-default-features --features wcash-consensus,release_max_level_info
+
+      - name: Stage the node
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item wolf\target\release\zebrad.exe out\wcash-zebrad.exe
+          Copy-Item wolf\LICENSE-APACHE out\WOLF-LICENSE-APACHE
+          Copy-Item wolf\LICENSE-MIT out\WOLF-LICENSE-MIT
+          @(
+            "Wcash node (zebrad) built from https://github.com/$env:WOLF_REPO at $env:WOLF_COMMIT",
+            "Features: wcash-consensus, release_max_level_info (no default features)",
+            "Built by $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          ) | Set-Content out\NODE-SOURCE.txt
+          & out\wcash-zebrad.exe --version
+          (Get-FileHash out\wcash-zebrad.exe -Algorithm SHA256).Hash
+
+      - name: Smoke test on Wcash Mainnet (2 minutes)
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP "wcash-node"
+          New-Item -ItemType Directory -Force $data | Out-Null
+          @"
+          [network]
+          network = "WcashMainnet"
+          listen_addr = "127.0.0.1:48233"
+          cache_dir = '$data\peers'
+
+          [state]
+          cache_dir = '$data\state'
+
+          [rpc]
+          lightwalletd_listen_addr = "127.0.0.1:48234"
+          enable_cookie_auth = false
+
+          [tracing]
+          filter = "info"
+          use_color = false
+          "@ | Set-Content "$data\zebrad.toml"
+          $p = Start-Process -FilePath out\wcash-zebrad.exe -ArgumentList @("-c", "$data\zebrad.toml", "start") `
+               -RedirectStandardOutput "$data\out.log" -RedirectStandardError "$data\err.log" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 120
+          $listening = $null -ne (Get-NetTCPConnection -LocalPort 48234 -State Listen -ErrorAction SilentlyContinue)
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          $log = (Get-Content "$data\out.log" -Raw) + (Get-Content "$data\err.log" -Raw)
+          ($log -split "`n" | Select-Object -Last 40) -join "`n"
+          if (-not $listening) { throw "the lightwalletd feed was not listening on 127.0.0.1:48234" }
+          if ($log -notmatch "sync_percent=") { throw "no sync progress reported" }
+          if ($log -match "sync_percent=0\.000%" -and $log -notmatch "sync_percent=[0-9]*[1-9]") { Write-Warning "no blocks synced in 2 minutes" }
+
+      - name: Upload the node
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wcash-node-win-x64
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  wallet:
+    name: Wallet (native module + UI)
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - name: Check out the wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@8d8cc9a8e0d47b64af669de71110e76860d6afbd
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+
+      - name: Install Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "36.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build the Mainnet native module and UI
+        env:
+          LZMA_API_STATIC: "1"
+        run: yarn build:allinone:windows-x64
+
+      - name: Upload the wallet build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallet-build-win-x64
+          path: build/
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package the installer
+    needs: [node, wallet]
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Check out the wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+
+      - name: Install Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Download the wallet build
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: wallet-build-win-x64
+          path: build
+
+      - name: Download the node
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: wcash-node-win-x64
+          path: node-bin
+
+      - name: Package (NSIS installer + portable zip)
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          Copy-Item build\native.node src\native.node
+          yarn pack:allinone:windows-x64
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Set-Location dist\allinone
+          Get-ChildItem -File | Where-Object { $_.Extension -in ".exe", ".zip" } | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Wcash-Wallet-AllInOne-win-x64
+          path: |
+            dist/allinone/*.exe
+            dist/allinone/*.zip
+            dist/allinone/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: Wcash-Wallet-AllInOne-win-x64
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" \
+            --title "Wcash Wallet all-in-one $GITHUB_REF_NAME (Windows)" \
+            --notes "Wcash Wallet with a bundled Wcash node for Windows x64. Unsigned: Windows SmartScreen will warn on first run. Verify the file against SHA256SUMS.txt."

@@ -22,7 +22,7 @@ const manifest = {
   product: "Wcash Wallet",
   network: "Wcash Mainnet",
   sourceSha,
-  endpoint: "http://mainnet.zecwec.com:48234",
+  endpoint: "http://127.0.0.1:48234 (bundled Wcash node)",
   genesis: "5bae12c8662a577b04ce1591af1a137c128f0cb51018a5f1622d861d1bb6fc48",
   branchId: "d9c6a7ee",
   tls: false,

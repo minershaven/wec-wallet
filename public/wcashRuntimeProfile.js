@@ -15,7 +15,8 @@ const MAINNET_RUNTIME_PROFILE = Object.freeze({
   network: "Wcash Mainnet",
   chainName: "main",
   ticker: "WEC",
-  endpoint: "http://mainnet.zecwec.com:48234",
+  // All-in-one build: the wallet syncs from its bundled Wcash node (see wcashNode.js).
+  endpoint: "http://127.0.0.1:48234",
   storageNamespace: "wcashmainnet-v1",
   branchId: "d9c6a7ee",
   ironwoodPrefix: "wu1",

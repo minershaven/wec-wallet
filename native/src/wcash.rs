@@ -58,7 +58,8 @@ const WCASH_NETWORK_LABEL: &str = "Wcash Testnet";
 #[cfg(feature = "wcash-mainnet")]
 const WCASH_PROFILE_ID: &str = "mainnet-v1";
 #[cfg(feature = "wcash-mainnet")]
-const WCASH_ENDPOINT: &str = "http://mainnet.zecwec.com:48234";
+// All-in-one build: Mainnet syncs from the bundled local Wcash node.
+const WCASH_ENDPOINT: &str = "http://127.0.0.1:48234";
 #[cfg(feature = "wcash-mainnet")]
 const WCASH_NETWORK: WalletNetwork = WalletNetwork::Mainnet;
 #[cfg(feature = "wcash-mainnet")]

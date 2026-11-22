@@ -13,6 +13,7 @@ const {
   resolveWcashUserDataPath,
   selectWcashRuntimeProfile,
 } = require("./wcashRuntimeProfile");
+const { startWcashNode, stopWcashNode, wcashNodeStatus } = require("./wcashNode");
 
 const packageMetadata = require("../package.json");
 const wcashProfile = selectWcashRuntimeProfile({
@@ -1295,6 +1296,11 @@ ipcMain.handle("mixnet:attach-current", async () => {
 });
 
 app.on("before-quit", () => killProxy());
+// Bundled Wcash node: stop it with the wallet. app.exit() skips before-quit,
+// so the process 'exit' hook covers those paths too.
+app.on("before-quit", () => stopWcashNode());
+process.on("exit", () => stopWcashNode());
+ipcMain.handle("wcashNode:status", () => wcashNodeStatus());
 ipcMain.handle("native:remove_transaction", (_e, txid) => requireNative("remove_transaction").remove_transaction(txid));
 ipcMain.handle("native:get_spendable_balance_with_address", (_e, address, zennies) =>
   requireNative("get_spendable_balance_with_address").get_spendable_balance_with_address(address, zennies),
@@ -2264,6 +2270,14 @@ async function maybeRunDebAppImageToFlatpakMigration() {
 // function once the Electron application is initialized.
 // Install REACT_DEVELOPER_TOOLS as well if isDev
 app.whenReady().then(async () => {
+  // Start the bundled Wcash node first: it needs the most time, and the wallet
+  // syncs from it on 127.0.0.1:48234. Never blocks or fails the launch.
+  await startWcashNode({
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    profileId: wcashProfile.id,
+  });
+  appendStartupLog(`bundled Wcash node: ${wcashNodeStatus().state}`);
   appendStartupLog("app ready; configuring Wcash native wallet directory");
   try {
     const native = getNative();
