@@ -238,6 +238,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A release published by hand (e.g. with the exact tested installer) is left as is.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; not replacing its files."
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" \
             --title "Wcash Wallet all-in-one $GITHUB_REF_NAME (Windows)" \
             --notes "Wcash Wallet with a bundled Wcash node for Windows x64. Unsigned: Windows SmartScreen will warn on first run. Verify the file against SHA256SUMS.txt."
