@@ -121,7 +121,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@8d8cc9a8e0d47b64af669de71110e76860d6afbd
         with:
-          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Cache cargo
